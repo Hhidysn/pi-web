@@ -6,7 +6,17 @@ import { listSessionFamilies } from "@/lib/session-family";
 import { loadExplorerOpen, saveExplorerOpen } from "@/lib/file-explorer-state";
 import { dispatchSessionRowContextMenu } from "@/lib/session-row-context-menu";
 import { skillExpansionToCommand } from "@/lib/slash-display";
-import { getProjectActivity, getRecentProjects, sessionsForProject } from "@/lib/project-groups";
+import { getProjectActivity, getRecentProjects } from "@/lib/project-groups";
+import {
+  PROJECT_GROUP_ROW_HEIGHT,
+  accordionRowIndex,
+  accordionVisibleIndices,
+  buildAccordion,
+  listProjectGroups,
+  loadExpandedProjectKeys,
+  saveExpandedProjectKeys,
+  toggleExpandedProjectKey,
+} from "@/lib/project-accordion";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
 import { formatRelativeTime } from "@/lib/i18n/format";
 import { useI18n } from "@/hooks/useI18n";
@@ -33,6 +43,9 @@ const FILE_MANAGER_ERROR_KEYS: Record<string, string> = {
   "unsupported-platform": "sidebar.openInExplorerUnsupported",
 };
 
+// Uniform-height windows for a single project's list. The project accordion
+// mixes group headers with conversation rows and windows through
+// lib/project-accordion.ts instead.
 export function getSessionListIndices(count: number, scrollTop: number, viewportHeight: number, focusedIndex = -1): number[] {
   const overscan = 8;
   const visibleCount = Math.ceil((viewportHeight || 600) / SESSION_LIST_ITEM_HEIGHT) + overscan * 2;
@@ -43,6 +56,13 @@ export function getSessionListIndices(count: number, scrollTop: number, viewport
   if (focusedIndex >= 0 && focusedIndex < start) indices.unshift(focusedIndex);
   if (focusedIndex >= end && focusedIndex < count) indices.push(focusedIndex);
   return indices;
+}
+
+/** Temporary client-side session id; pi is spawned lazily with the first message. */
+function newSessionId(): string {
+  return typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
 }
 
 declare global {
@@ -112,8 +132,7 @@ function ToolbarIconButton({
   );
 }
 
-function sessionListUrl(summary: boolean, force: boolean): string {
-  if (summary) return "/api/sessions?summary=1";
+function sessionListUrl(summary: boolean, force: boolean): string {  if (summary) return "/api/sessions?summary=1";
   if (force) return "/api/sessions?force=1";
   return "/api/sessions";
 }
@@ -144,6 +163,9 @@ interface Props {
   onBackgroundTaskDone?: () => void;
   onRunningSessionIdsChange?: (ids: Set<string>) => void;
   onSessionsChange?: (sessions: SessionInfo[]) => void;
+  /** Conversations that finished within the completion window, so the sidebar
+   *  can show the same "done" marker the tab bar shows. */
+  doneSessionIds?: ReadonlySet<string>;
 }
 
 interface WorktreeEntry {
@@ -395,7 +417,7 @@ function PiWebTitle() {
   );
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, onRunningSessionIdsChange, onSessionsChange, doneSessionIds }: Props) {
   const { t } = useI18n();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   // Tracked in a ref only: the version is compared against the polled value to
@@ -439,6 +461,9 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const [fileManager, setFileManager] = useState<FileManagerAvailability | null>(null);
   const [fileManagerError, setFileManagerError] = useState<string | null>(null);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
+  // Projects whose conversation list is open in the accordion. Kept across
+  // reloads so a project the user works in stays open without being revisited.
+  const [expandedProjectKeys, setExpandedProjectKeys] = useState<string[]>(loadExpandedProjectKeys);
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   const currentSuppressedCompletionSessionIdsRef = useRef<Set<string>>(new Set());
@@ -1081,13 +1106,17 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   const handleNewSession = useCallback(() => {
     if (!selectedCwd) return;
-    // Generate a temporary UUID client-side — no backend call needed.
-    // Pi will be spawned lazily when the user sends the first message.
-    const tempId = typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
-    onNewSession?.(tempId, selectedCwd);
+    onNewSession?.(newSessionId(), selectedCwd);
   }, [selectedCwd, onNewSession]);
+
+  // Start a conversation in a project straight from its accordion header: the
+  // workspace moves there too, so the composer, explorer and terminal all
+  // belong to the project the conversation is created in.
+  const handleNewSessionInProject = useCallback((root: string, projectKey: string) => {
+    setSelectedCwd(root);
+    setExpandedProjectKeys((keys) => toggleExpandedProjectKey(keys, projectKey, true));
+    onNewSession?.(newSessionId(), root);
+  }, [onNewSession]);
 
   const recentProjects = useMemo(() => getRecentProjects(allSessions), [allSessions]);
   const showProjectFilter = recentProjects.length > 8;
@@ -1104,8 +1133,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // Per-project activity counts (running / unread) for the workspace selector.
   // Uses the same stable server key as the project list and filtering.
   const projectActivity = useMemo(
-    () => getProjectActivity(allSessions, runningSessionIds, unreadSessionIds),
-    [allSessions, runningSessionIds, unreadSessionIds],
+    () => getProjectActivity(allSessions, runningSessionIds, unreadSessionIds, doneSessionIds),
+    [allSessions, runningSessionIds, unreadSessionIds, doneSessionIds],
   );
 
   // Any activity in a project other than the one currently selected — shown as
@@ -1118,10 +1147,73 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     [projectActivity, selectedProject],
   );
 
-  const filteredSessions = useMemo(
-    () => selectedProject ? sessionsForProject(allSessions, selectedProject.key) : allSessions,
-    [allSessions, selectedProject],
+  // ── Project accordion ──────────────────────────────────────────────
+  // Every project is listed with its conversations, so a conversation can be
+  // opened (or started) in any project without switching the workspace first.
+  // Only the visible rows of the (variable height) accordion are mounted.
+  useEffect(() => {
+    saveExpandedProjectKeys(expandedProjectKeys);
+  }, [expandedProjectKeys]);
+
+  const familiesByProjectKey = useMemo(() => {
+    const groups = new Map<string, ReturnType<typeof listSessionFamilies>>();
+    for (const family of listSessionFamilies(allSessions)) {
+      const key = workspaceKeyOf(family.root);
+      const list = groups.get(key);
+      if (list) list.push(family);
+      else groups.set(key, [family]);
+    }
+    return groups;
+  }, [allSessions]);
+
+  const projectKeyBySessionId = useMemo(() => {
+    const keys = new Map<string, string>();
+    for (const session of allSessions) keys.set(session.id, workspaceKeyOf(session));
+    return keys;
+  }, [allSessions]);
+
+  const projectGroups = useMemo(
+    () => listProjectGroups(
+      allSessions,
+      familiesByProjectKey,
+      selectedProject ? { key: selectedProject.key, root: selectedProject.root } : null,
+    ),
+    [allSessions, familiesByProjectKey, selectedProject],
   );
+
+  const accordion = useMemo(
+    () => buildAccordion(
+      projectGroups.map((group) => ({
+        key: group.key,
+        expanded: expandedProjectKeys.includes(group.key),
+        items: group.items,
+      })),
+      (family) => family.root.id,
+    ),
+    [expandedProjectKeys, projectGroups],
+  );
+
+  const accordionIndices = useMemo(
+    () => accordionVisibleIndices(
+      accordion,
+      listScrollTop,
+      listViewportH,
+      accordionRowIndex(accordion, focusedSessionId),
+    ),
+    [accordion, focusedSessionId, listScrollTop, listViewportH],
+  );
+
+  const toggleProjectGroup = useCallback((key: string, expanded: boolean) => {
+    setExpandedProjectKeys((keys) => toggleExpandedProjectKey(keys, key, expanded));
+  }, []);
+
+  // Reveal the group of the open conversation, and the group the workspace was
+  // switched to, without collapsing anything the user opened by hand.
+  const revealedProjectKey = projectKeyBySessionId.get(selectedSessionId ?? "") ?? selectedProject?.key ?? null;
+  useEffect(() => {
+    if (!revealedProjectKey) return;
+    setExpandedProjectKeys((keys) => keys.includes(revealedProjectKey) ? keys : [...keys, revealedProjectKey]);
+  }, [revealedProjectKey]);
   const showWorktreeSwitcher = Boolean(
     worktreeState?.isGit
     && worktreeState.isTopLevel
@@ -1150,15 +1242,6 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
            title: t("sidebar.checkingWorktrees"),
         }
       : null);
-
-  const sessionFamilies = useMemo(() => listSessionFamilies(filteredSessions), [filteredSessions]);
-
-  const virtualIndices = useMemo(() => getSessionListIndices(
-    sessionFamilies.length,
-    listScrollTop,
-    listViewportH,
-    sessionFamilies.findIndex((family) => family.root.id === focusedSessionId),
-  ), [focusedSessionId, listScrollTop, listViewportH, sessionFamilies]);
 
   return (
     <div
@@ -1864,20 +1947,42 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             {error}
           </div>
         )}
-        {!loading && !error && sessionFamilies.length === 0 && (
+        {!loading && !error && accordion.rows.length === 0 && (
           <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
             {t("sidebar.noSessions")}
           </div>
         )}
-        {sessionFamilies.length > 0 && (
+        {accordion.rows.length > 0 && (
           <div
             style={{
               position: "relative",
-              height: sessionFamilies.length * SESSION_LIST_ITEM_HEIGHT,
+              height: accordion.totalHeight,
             }}
           >
-            {virtualIndices.map((index) => {
-              const family = sessionFamilies[index];
+            {accordionIndices.map((index) => {
+              const row = accordion.rows[index];
+              const group = projectGroups.find((candidate) => candidate.key === row.sectionKey) ?? null;
+              if (row.kind === "group" || !row.item) {
+                const groupSessions = (group?.items ?? []).flatMap((item) => [item.root, ...item.subagents]);
+                return (
+                  <div
+                    key={row.key}
+                    style={{ position: "absolute", top: accordion.offsets[index], left: 0, right: 0, height: row.height }}
+                  >
+                    <ProjectGroupHeader
+                      root={group?.root ?? row.sectionKey}
+                      count={group?.items.length ?? 0}
+                      expanded={expandedProjectKeys.includes(row.sectionKey)}
+                      isCurrent={row.sectionKey === selectedProject?.key}
+                      hasSelectedSession={groupSessions.some((session) => session.id === selectedSessionId)}
+                      activity={projectActivity.get(row.sectionKey)}
+                      onToggle={(expanded) => toggleProjectGroup(row.sectionKey, expanded)}
+                      onNewSession={() => handleNewSessionInProject(group?.root ?? row.sectionKey, row.sectionKey)}
+                    />
+                  </div>
+                );
+              }
+              const family = row.item;
               const familySessions = [family.root, ...family.subagents];
               const displaySession = family.latestModified === family.root.modified
                 ? family.root
@@ -1885,15 +1990,16 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
               // Bubble blur after the input's save handler before unpinning the row.
               return (
                 <div
-                  key={family.root.id}
+                  key={row.key}
                   onFocus={() => setFocusedSessionId(family.root.id)}
                   onBlur={() => setFocusedSessionId(null)}
-                  style={{ position: "absolute", top: index * SESSION_LIST_ITEM_HEIGHT, left: 0, right: 0 }}
+                  style={{ position: "absolute", top: accordion.offsets[index], left: 0, right: 0, height: row.height }}
                 >
                   <SessionItem
                     session={displaySession}
                     isSelected={familySessions.some((session) => session.id === selectedSessionId)}
                     isRunning={familySessions.some((session) => runningSessionIds.has(session.id))}
+                    isDone={familySessions.some((session) => doneSessionIds?.has(session.id))}
                     isUnread={familySessions.some((session) => unreadSessionIds.has(session.id))}
                     onClick={() => handleSelectSessionFromList(family.root)}
                     onRenamed={loadSessions}
@@ -2164,16 +2270,43 @@ function UnreadSessionIndicator() {
 }
 
 /**
- * Compact per-project activity badges for the workspace selector dropdown items:
- * a spinning running icon + count and an unread dot + count. Renders nothing
- * when the project has no activity. Counts share the accent / unread colors of
- * the per-session indicators so the two stay visually consistent.
+ * "Just finished" marker: a green check with the word the tab bar uses, so a
+ * conversation that completed while the user was elsewhere is visible at a
+ * glance in the sidebar too.
+ */
+function DoneSessionIndicator() {
+  const { t } = useI18n();
+  return (
+    <span
+      title={t("sidebar.completedRecently")}
+      aria-label={t("sidebar.completedRecently")}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        flexShrink: 0,
+        color: "#22c55e",
+      }}
+    >
+      <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: "block" }}>
+        <polyline points="2.5 7.5 5.5 10.5 11.5 3.5" />
+      </svg>
+      {t("sidebar.completedLabel")}
+    </span>
+  );
+}
+
+/**
+ * Compact per-project activity badges for the workspace selector dropdown items
+ * and the accordion headers: a spinning running icon, a done check and an unread
+ * dot, each with its count. Renders nothing when the project has no activity.
+ * Counts share the per-session indicator colors so the two stay consistent.
  */
 function showProjectActivity(
-  activity: { running: number; unread: number } | undefined,
+  activity: { running: number; done?: number; unread: number } | undefined,
   t: (key: string) => string,
 ): ReactNode {
-  if (!activity || (activity.running === 0 && activity.unread === 0)) return null;
+  if (!activity || (activity.running === 0 && activity.unread === 0 && !activity.done)) return null;
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 5, flexShrink: 0, marginLeft: 6 }}>
       {activity.running > 0 && (
@@ -2201,7 +2334,145 @@ function showProjectActivity(
           {activity.unread}
         </span>
       )}
+      {activity.running === 0 && (activity.done ?? 0) > 0 && (
+        <span
+          title={t("sidebar.completedRecently")}
+          aria-label={`${t("sidebar.completedRecently")} (${activity.done})`}
+          style={{ display: "inline-flex", alignItems: "center", gap: 3, color: "#22c55e", fontSize: 10, fontFamily: "var(--font-mono)" }}
+        >
+          <svg width="10" height="10" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ display: "block" }}>
+            <polyline points="2.5 7.5 5.5 10.5 11.5 3.5" />
+          </svg>
+          {activity.done}
+        </span>
+      )}
     </span>
+  );
+}
+
+/**
+ * One project's header row in the sidebar accordion. The chevron and the row
+ * itself open/close the project's conversations; the "+" starts a new
+ * conversation in that project (and moves the workspace there). The current
+ * workspace and the project holding the open conversation are highlighted, and
+ * activity is shown per project so a running or just-finished conversation in
+ * another project is visible without expanding it.
+ */
+function ProjectGroupHeader({
+  root,
+  count,
+  expanded,
+  isCurrent,
+  hasSelectedSession,
+  activity,
+  onToggle,
+  onNewSession,
+}: {
+  root: string;
+  count: number;
+  expanded: boolean;
+  isCurrent: boolean;
+  hasSelectedSession: boolean;
+  activity: { running: number; done?: number; unread: number } | undefined;
+  onToggle: (expanded: boolean) => void;
+  onNewSession: () => void;
+}) {
+  const { t } = useI18n();
+  const [hovered, setHovered] = useState(false);
+  const action = expanded ? t("sidebar.collapseProject") : t("sidebar.expandProject");
+  return (
+    <div
+      data-project-group={root}
+      style={{
+        height: PROJECT_GROUP_ROW_HEIGHT,
+        display: "flex",
+        alignItems: "center",
+        paddingLeft: 14,
+        paddingRight: 8,
+        gap: 6,
+        background: hasSelectedSession ? "var(--bg-selected)" : isCurrent ? "var(--bg-hover)" : "transparent",
+        borderLeft: hasSelectedSession ? "2px solid var(--accent)" : "2px solid transparent",
+        borderTop: "1px solid var(--border)",
+        transition: "background 0.1s",
+        overflow: "hidden",
+      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <button
+        onClick={() => onToggle(!expanded)}
+        aria-expanded={expanded}
+        title={`${action}: ${root}`}
+        aria-label={`${action}: ${root}`}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          flex: 1,
+          minWidth: 0,
+          height: "100%",
+          padding: 0,
+          background: "none",
+          border: "none",
+          color: isCurrent || hasSelectedSession ? "var(--text)" : "var(--text-muted)",
+          cursor: "pointer",
+          textAlign: "left",
+          fontSize: 11,
+          fontWeight: isCurrent || hasSelectedSession ? 600 : 500,
+        }}
+      >
+        <svg
+          width="9"
+          height="9"
+          viewBox="0 0 10 10"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+          style={{ flexShrink: 0, transform: expanded ? "none" : "rotate(-90deg)", transition: "transform 0.15s" }}
+        >
+          <polyline points="2 3.5 5 6.5 8 3.5" />
+        </svg>
+        <PathLabel text={root} style={{ flex: 1, fontFamily: "var(--font-mono)", color: "inherit" }} />
+        <span
+          title={t("sidebar.conversationsCount", { count })}
+          style={{ flexShrink: 0, color: "var(--text-dim)", fontSize: 10, fontFamily: "var(--font-mono)" }}
+        >
+          {count}
+        </span>
+        {showProjectActivity(activity, t)}
+      </button>
+      <button
+        onClick={onNewSession}
+        title={`${t("sidebar.newSessionInProject")}: ${root}`}
+        aria-label={`${t("sidebar.newSessionInProject")}: ${root}`}
+        onFocus={() => setHovered(true)}
+        onBlur={() => setHovered(false)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 20,
+          height: 20,
+          padding: 0,
+          flexShrink: 0,
+          background: "none",
+          border: "none",
+          borderRadius: 5,
+          color: "var(--text-muted)",
+          cursor: "pointer",
+          opacity: hovered || isCurrent ? 1 : 0,
+          transition: "opacity 0.1s",
+        }}
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+      </button>
+    </div>
   );
 }
 
@@ -2209,6 +2480,7 @@ function SessionItem({
   session,
   isSelected,
   isRunning,
+  isDone,
   isUnread,
   onClick,
   onRenamed,
@@ -2221,6 +2493,8 @@ function SessionItem({
   session: SessionInfo;
   isSelected: boolean;
   isRunning?: boolean;
+  /** Finished within the completion window (see lib/session-status.ts). */
+  isDone?: boolean;
   isUnread?: boolean;
   onClick: () => void;
   onRenamed?: () => void;
@@ -2448,6 +2722,8 @@ function SessionItem({
             <div style={{ marginTop: 2, display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 11, minWidth: 0 }}>
               {isRunning ? (
                 <RunningSessionIndicator />
+              ) : isDone ? (
+                <DoneSessionIndicator />
               ) : isUnread ? (
                 <UnreadSessionIndicator />
               ) : (

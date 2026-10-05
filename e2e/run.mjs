@@ -218,7 +218,9 @@ try {
     console.log("PASS: external session-file appends are visible on force/mount reads");
   }
 
-  browser = await chromium.launch();
+  // E2E_BROWSER_CHANNEL=msedge|chrome runs against an installed browser instead
+  // of the bundled Playwright build (useful when its download is unavailable).
+  browser = await chromium.launch(process.env.E2E_BROWSER_CHANNEL ? { channel: process.env.E2E_BROWSER_CHANNEL } : {});
   for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
     context = await browser.newContext({ viewport, locale: "en-US" });
     await context.tracing.start({ screenshots: true, snapshots: true });
@@ -233,8 +235,19 @@ try {
       const url = new URL(response.url());
       if (url.pathname === `/api/sessions/${LONG}/context` && url.searchParams.has("before")) olderResponses.push(response);
     });
+    // Conversation tabs are restored from storage on load, so a bare
+    // ?session= navigation would remount every conversation opened so far.
+    // These sections assert on one chat pane, so they drop the stored tabs
+    // first and re-enter a single conversation.
+    const gotoSession = async (id) => {
+      await page.evaluate(() => window.localStorage.removeItem("pi-web:open-session-tabs")).catch(() => {});
+      await page.goto(`${base}/?session=${id}`, { waitUntil: "domcontentloaded" });
+    };
+    // The chat area keeps background conversations mounted; chat assertions
+    // have to address the pane that is actually shown.
+    const pane = () => page.locator("[data-session-pane-active='true']");
     const stateReady = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/sessions/${LONG}/state`);
-    await page.goto(`${base}/?session=${LONG}`, { waitUntil: "domcontentloaded" });
+    await gotoSession(LONG);
     assert.equal((await stateReady).status(), 200);
     await page.getByText(text(4999), { exact: true }).waitFor();
     const latestUser = await page.getByText(text(4998), { exact: true }).elementHandle();
@@ -279,14 +292,14 @@ try {
       Array.from({ length: 5000 - oldest }, (_, i) => text(oldest + i)), "Missing, reordered, or duplicate chat messages");
     await page.screenshot({ path: join(artifacts, `history-${viewport.width}.png`) });
 
-    await page.goto(`${base}/?session=${BRANCH}`, { waitUntil: "domcontentloaded" });
+    await gotoSession(BRANCH);
     await page.getByText("Active branch answer", { exact: true }).waitFor();
     assert.equal(await page.getByText("Inactive branch answer", { exact: true }).count(), 0);
     const thinkingRequests = [];
     page.on("request", (request) => {
       if (new URL(request.url()).pathname.endsWith("/thinking")) thinkingRequests.push(request.url());
     });
-    await page.goto(`${base}/?session=${RICH}`, { waitUntil: "domcontentloaded" });
+    await gotoSession(RICH);
     await page.locator("strong").filter({ hasText: "E2E markdown" }).waitFor();
     await page.locator("pre").filter({ hasText: "console.log('E2E code');" }).waitFor();
     await page.getByText("E2E final answer", { exact: true }).waitFor();
@@ -317,20 +330,20 @@ try {
     await page.getByText("echo E2E tool output", { exact: true }).waitFor();
     await page.getByRole("button", { name: /bash.*echo E2E tool output/ }).click();
     await page.getByText("E2E tool output", { exact: true }).waitFor();
-    await page.goto(`${base}/?session=${COMPACTED}`, { waitUntil: "domcontentloaded" });
+    await gotoSession(COMPACTED);
     const heading = page.getByRole("heading", { name: "E2E compacted heading", exact: true });
     await heading.waitFor({ state: "attached" });
     if (viewport.width > 600) {
-      const node = page.locator("[data-minimap-node-index='0']");
+      const node = pane().locator("[data-minimap-node-index='0']");
       await node.waitFor();
       const rect = await node.boundingBox();
       assert.ok(rect);
       await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
-      const preview = page.locator("[data-minimap-preview-box]");
+      const preview = pane().locator("[data-minimap-preview-box]");
       await preview.getByRole("button", { name: "E2E compaction anchor", exact: true }).waitFor();
       await preview.getByRole("button", { name: "E2E compacted heading", exact: true }).click();
       await page.waitForFunction(() => {
-        const heading = document.querySelector("[data-entry-id='answer'] h2");
+        const heading = document.querySelector("[data-session-pane-active='true'] [data-entry-id='answer'] h2");
         const scroll = heading?.closest(".overflow-y-auto");
         return heading && scroll && Math.abs(heading.getBoundingClientRect().top
           - scroll.getBoundingClientRect().top - scroll.clientHeight * 0.3) < 5;
@@ -338,8 +351,8 @@ try {
       await page.screenshot({ path: join(artifacts, "compaction-minimap.png") });
 
       const selectSession = async (title, entryId) => {
-        await page.locator(`[title="${title}"]`).click();
-        await page.locator(`[data-entry-id="${entryId}"]:not([data-message-role])`).waitFor({ state: "visible" });
+        await page.locator(`[title="${title}"]`).first().click();
+        await pane().locator(`[data-entry-id="${entryId}"]:not([data-message-role])`).waitFor({ state: "visible" });
       };
       const readingOffset = (target) => target.evaluate((element) => (
         element.getBoundingClientRect().top - element.closest(".overflow-y-auto").getBoundingClientRect().top
@@ -353,22 +366,30 @@ try {
       };
       await selectSession(text(0), "e4999");
       const olderPage = page.waitForResponse((response) => response.url().includes(`/api/sessions/${LONG}/context?`));
-      await page.getByText("Scroll up to load earlier messages", { exact: true }).evaluate((element) => element.scrollIntoView({ block: "start", behavior: "instant" }));
+      await pane().getByText("Scroll up to load earlier messages", { exact: true }).evaluate((element) => element.scrollIntoView({ block: "start", behavior: "instant" }));
       await olderPage;
-      const olderMessage = page.locator("[data-entry-id='e4920']");
+      const olderMessage = pane().locator("[data-entry-id='e4920']");
       const olderOffset = await positionForReading(olderMessage);
       await selectSession("Render **E2E markdown**", "user");
-      const process = page.getByRole("button", { name: /process details/i });
+      const process = pane().getByRole("button", { name: /process details/i });
       await process.click();
-      const answerHeading = page.getByRole("heading", { name: "E2E reading position", exact: true });
+      const answerHeading = pane().getByRole("heading", { name: "E2E reading position", exact: true });
       const answerOffset = await positionForReading(answerHeading);
       await selectSession(text(0), "e4920");
       assert.ok(Math.abs(await readingOffset(olderMessage) - olderOffset) < 5, "Returning to older history must restore its reading offset");
       await selectSession("Render **E2E markdown**", "user");
-      assert.equal(await process.getAttribute("aria-expanded"), "false");
-      assert.ok(Math.abs(await readingOffset(answerHeading) - answerOffset) < 5, "Collapsing process details on remount must not displace the answer");
+      // Tabs keep the conversation mounted, so the process details the user
+      // opened stay open where upstream remounted and collapsed them.
+      assert.equal(await process.getAttribute("aria-expanded"), "true");
+      assert.ok(Math.abs(await readingOffset(answerHeading) - answerOffset) < 5, "Switching tabs must not displace the answer");
 
-      // Hold pagination until a different branch has loaded, exercising effect cancellation.
+      // Hold an older-history request of a background tab. Upstream remounted
+      // the chat on a switch and cancelled such a request; tabs keep the pane
+      // mounted, so the same request must now finish behind the shown tab.
+      const lowestEntryId = () => pane().locator("[data-entry-id^='e']").evaluateAll((nodes) =>
+        Math.min(...nodes.map((node) => Number(node.dataset.entryId.slice(1)))));
+      await selectSession(text(0), "e4920");
+      const loadedSoFar = await lowestEntryId();
       let releaseHistory;
       const historyGate = new Promise((resolve) => { releaseHistory = resolve; });
       const contextRoute = `**/api/sessions/${LONG}/context?*`;
@@ -376,32 +397,53 @@ try {
         if (new URL(route.request().url()).searchParams.has("before")) await historyGate;
         await route.continue().catch(() => {});
       });
-      // Context loading is real; avoid starting an agent just to persist the test branch.
-      const agentRoute = `**/api/agent/${LONG}`;
-      await page.route(agentRoute, (route) => route.fulfill({ json: {} }));
       try {
         const pendingHistory = page.waitForRequest((request) => request.url().includes(`/api/sessions/${LONG}/context?`) && new URL(request.url()).searchParams.has("before"));
-        await page.locator(`[title="${text(0)}"]`).click();
+        await pane().getByText("Scroll up to load earlier messages", { exact: true }).evaluate((element) => element.scrollIntoView({ block: "start", behavior: "instant" }));
         await pendingHistory;
-        await page.getByRole("button", { name: "Branches", exact: true }).click();
-        await page.getByText("E2E alternate history branch", { exact: true }).click();
-        await page.locator("[data-entry-id='alternate']:not([data-message-role])").waitFor({ state: "visible" });
-        await page.screenshot({ path: join(artifacts, "scroll-restore-branch.png") });
+        // The shown tab neither waits for it nor loses its reading position.
+        await selectSession("Render **E2E markdown**", "user");
+        assert.equal(await pane().getByRole("heading", { name: "E2E reading position", exact: true }).count(), 1,
+          "A background pagination request must not disturb the shown tab");
+        const delivered = page.waitForResponse((response) =>
+          response.url().includes(`/api/sessions/${LONG}/context?`) && new URL(response.url()).searchParams.has("before"));
+        releaseHistory();
+        assert.equal((await delivered).status(), 200);
+        await selectSession(text(0), "e4920");
+        await page.waitForFunction((previous) => {
+          const pane = document.querySelector("[data-session-pane-active='true']");
+          if (!pane) return false;
+          const ids = [...pane.querySelectorAll("[data-entry-id^='e']")]
+            .map((node) => Number(node.dataset.entryId.slice(1)));
+          return ids.length > 0 && Math.min(...ids) < previous;
+        }, loadedSoFar);
+        await page.screenshot({ path: join(artifacts, "background-pagination.png") });
       } finally {
         releaseHistory();
         await page.unroute(contextRoute);
+      }
+      // The branch picker still switches the branch of the shown pane. Agent
+      // calls are mocked: the picker persists the choice through the agent.
+      await gotoSession(LONG);
+      const agentRoute = `**/api/agent/${LONG}`;
+      await page.route(agentRoute, (route) => route.fulfill({ json: {} }));
+      try {
+        await page.getByRole("button", { name: "Branches", exact: true }).click();
+        await page.getByText("E2E alternate history branch", { exact: true }).click();
+        await page.locator("[data-entry-id='alternate']:not([data-message-role])").waitFor({ state: "visible" });
+      } finally {
         await page.unroute(agentRoute);
       }
-      console.log("PASS: session reading offsets, collapsed process details, and cancelled branch restoration");
-      await page.goto(`${base}/?session=${COMPACTED}`, { waitUntil: "domcontentloaded" });
+      console.log("PASS: session reading offsets, preserved process details, background pagination, and branch switching");
+      await gotoSession(COMPACTED);
       await heading.waitFor({ state: "visible" });
     }
-    await page.goto(`${base}/?session=${RICH}`, { waitUntil: "domcontentloaded" });
+    await gotoSession(RICH);
     await page.locator(".markdown-code-block pre").waitFor();
     await checkFilePanel(page, previewFile);
     await checkExtensionDialogs(page, artifacts, viewport.width);
     if (viewport.width > 600) {
-      await page.goto(`${base}/?session=${RICH}`, { waitUntil: "domcontentloaded" });
+      await gotoSession(RICH);
       await page.locator(".markdown-code-block pre").waitFor();
       await checkChatAppearance(page);
     }

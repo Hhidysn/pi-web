@@ -4,6 +4,8 @@
 
 Local browser UI for the [pi coding agent](https://github.com/earendil-works/pi). Pi Web uses the same local configuration and session files as pi, so you can browse and resume conversations, run agent turns, configure models and resources, and inspect project files from a browser.
 
+> **This fork (`pi-web-gui`)** tracks upstream and changes the UI only: conversations open as tabs that keep running in the background, the sidebar lists every project as a collapsible group, and each conversation shows 运行中 / 完成 / 无状态. Run it locally with `npm run dev` (port 30141 by default). See [docs/adr/0007](docs/adr/0007-conversation-tabs-and-project-accordion.md) and the [user guide](docs/fork.zh-CN.md).
+
 **[Try the interactive demo →](https://agegr.github.io/pi-web/)** The real Pi Web UI runs entirely in your browser, with sample sessions, files and models. There is nothing to install; replies are pre-written and no model is called.
 
 ![Pi Web displaying a pi session with structured Markdown, tool calls, and project navigation](https://raw.githubusercontent.com/agegr/pi-web/main/docs/screenshot2.png)

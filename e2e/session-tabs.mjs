@@ -171,10 +171,65 @@ try {
   const sessions = await (await fetch(`${base}/api/sessions`)).json();
   assert.ok(sessions.sessions.some((session) => session.id === BETA), "closing a tab must not delete the conversation");
 
+  // 6. Every project is listed as a group, so a conversation from another
+  //    project opens without switching the workspace first.
+  const isExpanded = async (root) =>
+    (await page.getByRole("button", { name: `Collapse project: ${root}` }).count()) > 0;
+  const setExpanded = async (root, want) => {
+    if (await isExpanded(root) === want) return;
+    const action = want ? "Expand" : "Collapse";
+    await page.getByRole("button", { name: `${action} project: ${root}` }).first().click();
+    assert.equal(await isExpanded(root), want, `${root} is ${want ? "open" : "closed"}`);
+  };
+  await setExpanded(projectA, true);
+  await setExpanded(projectB, true);
+  await page.getByTitle("Tabs alpha second question", { exact: true }).first().waitFor();
+  await page.getByTitle("Tabs beta question", { exact: true }).first().waitFor();
+  await setExpanded(projectA, false);
+  assert.equal(await page.getByTitle("Tabs alpha second question", { exact: true }).count(), 0,
+    "collapsing a project hides its own conversations");
+  assert.equal(await page.getByTitle("Tabs beta question", { exact: true }).count(), 1,
+    "collapsing one project leaves the other project's conversations listed");
+  await page.getByTitle("Tabs beta question", { exact: true }).first().click();
+  await page.getByText("Tabs beta answer", { exact: true }).waitFor();
+  await tab("Tabs alpha question").waitFor();
+  assert.equal(await page.locator("[role='tab']").count(), 2, "a conversation from another project opens as a tab");
+  await setExpanded(projectA, true);
+  await page.screenshot({ path: join(artifacts, "session-accordion.png") });
+
+  // 7. A group's "+" starts a conversation in that project and moves there.
+  await page.getByRole("button", { name: `New conversation in this project: ${projectA}` }).click();
+  await page.locator("textarea.chat-input-textarea:visible").first().waitFor();
+  await page.getByRole("button", { name: `Collapse project: ${projectA}` }).first().waitFor();
+  assert.equal(await page.locator("[role='tab']").count(), 2, "starting a conversation does not disturb the open tabs");
+
+  // 8. Status markers: a polled running session shows 运行中 and the completion
+  //    that follows shows 完成 (both on the tab and in the sidebar row).
+  let runningNow = [ALPHA];
+  await page.route("**/api/agent/running*", (route) => route.fulfill({
+    json: {
+      sessionListVersion: 1,
+      runningSessionIds: runningNow,
+      completionNotificationSuppressedSessionIds: [],
+    },
+  }));
+  await tab("Tabs alpha question").locator("[aria-label='Running']").waitFor({ timeout: 10_000 });
+  runningNow = [];
+  await tab("Tabs alpha question").locator("[aria-label='Done']").waitFor({ timeout: 15_000 });
+  assert.equal(await tab("Tabs beta question").locator("[aria-label='Done']").count(), 0,
+    "only the conversation that finished is marked done");
+  await page.getByTitle("Just finished", { exact: true }).first().waitFor();
+  // Choosing the conversation clears the marker: it is no longer news.
+  await tab("Tabs alpha question").click();
+  await tab("Tabs alpha question").locator("[aria-label='Done']").waitFor({ state: "detached", timeout: 10_000 });
+  await page.screenshot({ path: join(artifacts, "session-status.png") });
+
   const recoverableErrors = consoleErrors.filter((text) => !/favicon|manifest/i.test(text));
   assert.deepEqual(recoverableErrors, [], "browser errors while using tabs");
   await page.screenshot({ path: join(artifacts, "session-tabs-after-close.png") });
   console.log("PASS: conversation tabs keep panes mounted, switch without refetching, and restore after reload");
+  console.log("PASS: the project accordion opens, collapses and starts conversations per project");
+  console.log("PASS: running and finished conversations are marked on the tab and in the sidebar");
 } finally {
   await browser?.close().catch(() => {});
   server?.kill("SIGTERM");

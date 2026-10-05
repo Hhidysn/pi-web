@@ -29,18 +29,20 @@ export function getProjectActivity(
   sessions: readonly SessionInfo[],
   runningSessionIds: ReadonlySet<string>,
   unreadSessionIds: ReadonlySet<string>,
-): Map<string, { running: number; unread: number }> {
-  const counts = new Map<string, { running: number; unread: number }>();
+  doneSessionIds: ReadonlySet<string> = new Set(),
+): Map<string, { running: number; unread: number; done: number }> {
+  const counts = new Map<string, { running: number; unread: number; done: number }>();
   for (const session of sessions) {
     const key = workspaceKeyOf(session);
     if (!key) continue;
     let entry = counts.get(key);
     if (!entry) {
-      entry = { running: 0, unread: 0 };
+      entry = { running: 0, unread: 0, done: 0 };
       counts.set(key, entry);
     }
     if (runningSessionIds.has(session.id)) entry.running++;
     if (unreadSessionIds.has(session.id)) entry.unread++;
+    if (!runningSessionIds.has(session.id) && doneSessionIds.has(session.id)) entry.done++;
   }
   return counts;
 }

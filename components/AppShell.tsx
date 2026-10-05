@@ -46,6 +46,7 @@ import {
   saveOpenSessionTabs,
 } from "@/lib/session-tabs";
 import {
+  DONE_STATUS_WINDOW_MS,
   deriveSessionActivityStatus,
   pruneCompletionTimes,
   withCompletionTimes,
@@ -510,6 +511,26 @@ export function AppShell() {
     });
     setCompletedAt((completed) => pruneCompletionTimes(completed, known));
   }, [sessionCatalog, selectedSession?.id]);
+
+  // Expire "done" markers on their own: the completion window is time based, so
+  // a conversation that finished 30 minutes ago stops being news even when
+  // nothing else re-renders the tab bar. The timer is re-armed after every
+  // prune and stays bounded so an idle tab wakes at most once a minute.
+  useEffect(() => {
+    const times = Object.values(completedAt);
+    if (times.length === 0) return;
+    const earliest = Math.min(...times) + DONE_STATUS_WINDOW_MS;
+    const timer = setTimeout(() => {
+      const now = Date.now();
+      setCompletedAt((completed) => {
+        const kept = Object.fromEntries(
+          Object.entries(completed).filter(([, at]) => at + DONE_STATUS_WINDOW_MS > now),
+        );
+        return Object.keys(kept).length === Object.keys(completed).length ? completed : kept;
+      });
+    }, Math.max(1000, Math.min(earliest - Date.now() + 1000, 60_000)));
+    return () => clearTimeout(timer);
+  }, [completedAt]);
 
   // Pull the newly visible pane's last report into the top-bar panels, and
   // clear them when the composer is shown instead of a conversation.
@@ -1390,6 +1411,10 @@ export function AppShell() {
     status: deriveSessionActivityStatus(session.id, runningSessionIds, completedAt),
   }));
 
+  // Conversations that finished inside the completion window, shared with the
+  // sidebar so both surfaces show the same "done" marker.
+  const doneSessionIds = useMemo(() => new Set(Object.keys(completedAt)), [completedAt]);
+
   const handleSelectSessionTab = useCallback((sessionId: string) => {
     const session = sessionsByIdRef.current.get(sessionId);
     if (session) handleSelectSession(session);
@@ -1546,6 +1571,7 @@ export function AppShell() {
         onBackgroundTaskDone={handleBackgroundTaskDone}
         onRunningSessionIdsChange={handleRunningSessionIdsChange}
         onSessionsChange={handleSessionsChange}
+        doneSessionIds={doneSessionIds}
       />
       <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
         {([
