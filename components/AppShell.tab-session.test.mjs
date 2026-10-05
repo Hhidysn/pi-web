@@ -42,5 +42,10 @@ test("deleting the current session forgets its tab memory", () => {
   const end = source.indexOf("  const handleOpenFile = useCallback", start);
   const body = source.slice(start, end);
   assert.match(body, /clearTabOpenSession\(sessionId\);/);
-  assert.ok(body.indexOf("clearTabOpenSession(sessionId)") < body.indexOf("setSelectedSession(null)"));
+  // Forgetting the id must happen before the composer takes over, so a reload
+  // cannot resurrect the deleted conversation.
+  assert.ok(body.indexOf("clearTabOpenSession(sessionId)") < body.indexOf("startComposerFor("));
+  const composerStart = source.indexOf("  const startComposerFor = useCallback");
+  const composerEnd = source.indexOf("  const handleSelectSession = useCallback", composerStart);
+  assert.match(source.slice(composerStart, composerEnd), /setSelectedSession\(null\);/);
 });

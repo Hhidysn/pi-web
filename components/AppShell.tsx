@@ -8,6 +8,7 @@ import { ChatWindow } from "./ChatWindow";
 import type { ChatScrollPosition } from "@/lib/chat-scroll-position";
 import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
+import { SessionTabBar, type SessionTabItem } from "./SessionTabBar";
 import { openFileTab, saveFileViewerState } from "./file-tab-state";
 import { SettingsPanel, SettingsSectionIcon } from "./SettingsPanel";
 import { ProjectTrustDialog, type ProjectTrustFailure } from "./ProjectTrustDialog";
@@ -35,6 +36,21 @@ import {
 import { setupPushSubscription } from "@/lib/push-client";
 import { getInitialNavigation, withTabOpen } from "@/lib/initial-navigation";
 import { clearTabOpenSession, getTabOpen, setTabOpenNewSession, setTabOpenSession } from "@/lib/tab-session";
+import {
+  addOpenSessionTab,
+  loadOpenSessionTabs,
+  moveOpenSessionTab,
+  nextActiveTabAfterClose,
+  readMaxOpenSessionTabs,
+  removeOpenSessionTab,
+  saveOpenSessionTabs,
+} from "@/lib/session-tabs";
+import {
+  deriveSessionActivityStatus,
+  pruneCompletionTimes,
+  withCompletionTimes,
+  withoutCompletionTime,
+} from "@/lib/session-status";
 import { mergeCatalogRow } from "./session-catalog-helpers";
 import { rekeyDraft } from "@/lib/draft-store";
 import {
@@ -60,6 +76,7 @@ import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/pi-types";
 import type { FileViewerState } from "@/lib/file-viewer-state";
 import type { ToolEntry } from "@/lib/tool-presets";
+import { skillExpansionToCommand } from "@/lib/slash-display";
 import { getSessionFamily } from "@/lib/session-family";
 import { getLastSettingsSection, settingsSectionRequiresProject, type SettingsSection } from "@/lib/settings-navigation";
 
@@ -70,11 +87,55 @@ type AutoNameStatus =
   | { kind: "success" }
   | { kind: "error"; message: string };
 
+/** Report callbacks of one chat pane, always defined and stable per session id. */
+type PaneReportHandlers = Required<Pick<
+  React.ComponentProps<typeof ChatWindow>,
+  | "onBranchDataChange"
+  | "onSystemPromptChange"
+  | "onSystemToolsChange"
+  | "onSystemInfoLoaderChange"
+  | "onSessionStatsChange"
+  | "onContextUsageChange"
+  | "onAgentEnd"
+  | "onAttentionNeeded"
+>>;
+
+/** Latest data a pane reported, kept per session so tab switches can restore it. */
+interface PaneReportState {
+  branchTree: SessionTreeNode[];
+  branchLeafId: string | null;
+  branchLeafChange: ((leafId: string | null) => void) | null;
+  branchLocked: boolean;
+  systemPrompt: string | null;
+  systemTools: ToolEntry[] | null;
+  systemInfoLoader: (() => Promise<void>) | null;
+  sessionStats: SessionStatsInfo | null;
+  contextUsage: { percent: number | null; contextWindow: number; tokens: number | null } | null;
+}
+
+/** Live AppShell handlers a pane report mirrors into while it is the visible pane. */
+interface PaneHandlerTargets {
+  handleBranchDataChange: (tree: SessionTreeNode[], activeLeafId: string | null, onLeafChange: (leafId: string | null) => void, locked: boolean) => void;
+  handleSystemPromptChange: (prompt: string | null) => void;
+  handleSystemToolsChange: (tools: ToolEntry[] | null) => void;
+  handleSystemInfoLoaderChange: (loader: (() => Promise<void>) | null) => void;
+  handleSessionStatsChange: (stats: SessionStatsInfo | null) => void;
+  handleContextUsageChange: (usage: { percent: number | null; contextWindow: number; tokens: number | null } | null) => void;
+  handleAttentionNeeded: (request: BlockingExtensionUiRequest) => void;
+  handlePaneAgentEnd: (sessionId: string) => void;
+}
+
 const TOP_BAR_ICON_BUTTON_SIZE = 36;
 const AGENT_PANEL_WIDTH = 420;
 
 function parkedNewSessionDraftKey(cwd: string): string {
   return `parked-new:${cwd}`;
+}
+
+/** Same label as the sidebar row, so a tab and its row never disagree. */
+function sessionTabLabel(session: SessionInfo): string {
+  const first = skillExpansionToCommand(session.firstMessage) ?? session.firstMessage ?? "";
+  return session.name?.trim() || first.replace(/\s+/g, " ").trim().slice(0, 50) || session.id.slice(0, 12);
 }
 
 export function AppShell() {
@@ -145,10 +206,19 @@ export function AppShell() {
     [selectedSession?.id, sessionsWithSelection],
   );
   const hasSubagentSessions = Boolean(activeSessionFamily?.subagents.length);
+  // Conversations that finished while the user was elsewhere, until opened.
+  const [completedAt, setCompletedAt] = useState<Record<string, number>>({});
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
+  const runningSessionIdsRef = useRef(runningSessionIds);
   const handleRunningSessionIdsChange = useCallback((ids: Set<string>) => {
-    setRunningSessionIds((previous) => {
-      if (previous.size === ids.size && [...ids].every((id) => previous.has(id))) return previous;
+    // A session that left the running set just finished: remember when, so its
+    // tab and sidebar row can show "done" until the user opens it again.
+    const previous = runningSessionIdsRef.current;
+    const finished = [...previous].filter((id) => !ids.has(id));
+    runningSessionIdsRef.current = ids;
+    if (finished.length > 0) setCompletedAt((completed) => withCompletionTimes(completed, finished));
+    setRunningSessionIds((prev) => {
+      if (prev.size === ids.size && [...ids].every((id) => prev.has(id))) return prev;
       return ids;
     });
   }, []);
@@ -254,6 +324,7 @@ export function AppShell() {
   }, [reclampRightPanelWidth, reclampSidebarWidth, rightPanelOpen]);
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const [pendingQuotePrompt, setPendingQuotePrompt] = useState<{ sessionId: string; text: string } | null>(null);
+  const handleInitialPromptConsumed = useCallback(() => setPendingQuotePrompt(null), []);
   const topBarRef = useRef<HTMLDivElement>(null);
   const mobileToolbarRef = useRef<HTMLDivElement>(null);
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
@@ -302,6 +373,167 @@ export function AppShell() {
   const autoNameTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeSessionIdRef = useRef<string | null>(selectedSession?.id ?? null);
   activeSessionIdRef.current = selectedSession?.id ?? null;
+
+  // Open conversation tabs. A tab is a view over a session that already exists
+  // on disk: the list restores on reload, and every open tab keeps its chat
+  // pane mounted so a background conversation keeps streaming. Closing a tab
+  // never deletes the conversation.
+  const [openTabIds, setOpenTabIds] = useState<string[]>(() => loadOpenSessionTabs());
+  const openTabIdsRef = useRef(openTabIds);
+  openTabIdsRef.current = openTabIds;
+  // Remount counter per session, used when Settings asks the chat to reload.
+  const [tabReloads, setTabReloads] = useState<Record<string, number>>({});
+  const sessionsByIdRef = useRef(new Map<string, SessionInfo>());
+  sessionsByIdRef.current = new Map(sessionsWithSelection.map((session) => [session.id, session]));
+  // One ChatInput handle per session, so inserting files/mentions targets the
+  // visible conversation instead of whichever pane mounted last.
+  const sessionChatInputRefsRef = useRef(new Map<string, React.RefObject<ChatInputHandle | null>>());
+  const paneReportsRef = useRef(new Map<string, PaneReportState>());
+  const paneReportHandlersRef = useRef(new Map<string, PaneReportHandlers>());
+  const paneHandlerTargetsRef = useRef<PaneHandlerTargets | null>(null);
+
+  const openSessionTab = useCallback((sessionId: string) => {
+    if (!sessionId) return;
+    setOpenTabIds((ids) => addOpenSessionTab(ids, sessionId, readMaxOpenSessionTabs()).tabs);
+    setCompletedAt((completed) => withoutCompletionTime(completed, sessionId));
+  }, []);
+
+  /** Reload the visible chat (Settings/changed trust): remount just that pane. */
+  const reloadActiveChat = useCallback(() => {
+    const id = activeSessionIdRef.current;
+    if (!id) {
+      setSessionKey((key) => key + 1);
+      return;
+    }
+    setTabReloads((reloads) => ({ ...reloads, [id]: (reloads[id] ?? 0) + 1 }));
+  }, []);
+
+  const chatInputRefForSession = useCallback((sessionId: string) => {
+    let ref = sessionChatInputRefsRef.current.get(sessionId);
+    if (!ref) {
+      ref = { current: null };
+      sessionChatInputRefsRef.current.set(sessionId, ref);
+    }
+    return ref;
+  }, []);
+
+  /** Input handle of the visible conversation, for explorer "insert mention" actions. */
+  const activeChatInputRef = useCallback(() => {
+    const id = activeSessionIdRef.current;
+    return (id ? sessionChatInputRefsRef.current.get(id) : undefined) ?? chatInputRef;
+  }, [chatInputRef]);
+
+  /**
+   * Report callbacks of one chat pane. A pane always writes its latest data
+   * into its own slot; only the visible pane's slot is mirrored into the
+   * single-valued top-bar panels, so a background pane cannot overwrite what
+   * the user is looking at. Identities are cached per session id so switching
+   * tabs does not re-run ChatWindow effects.
+   */
+  const paneReportHandlersFor = useCallback((sessionId: string) => {
+    const cached = paneReportHandlersRef.current.get(sessionId);
+    if (cached) return cached;
+    const ensureReport = (): PaneReportState => {
+      let report = paneReportsRef.current.get(sessionId);
+      if (!report) {
+        report = {
+          branchTree: [],
+          branchLeafId: null,
+          branchLeafChange: null,
+          branchLocked: false,
+          systemPrompt: null,
+          systemTools: null,
+          systemInfoLoader: null,
+          sessionStats: null,
+          contextUsage: null,
+        };
+        paneReportsRef.current.set(sessionId, report);
+      }
+      return report;
+    };
+    const isActive = () => activeSessionIdRef.current === sessionId;
+    const handlers: PaneReportHandlers = {
+      onBranchDataChange: (tree, leafId, onLeafChange, locked) => {
+        const report = ensureReport();
+        report.branchTree = tree;
+        report.branchLeafId = leafId;
+        report.branchLeafChange = onLeafChange;
+        report.branchLocked = locked;
+        if (isActive()) paneHandlerTargetsRef.current?.handleBranchDataChange(tree, leafId, onLeafChange, locked);
+      },
+      onSystemPromptChange: (prompt) => {
+        ensureReport().systemPrompt = prompt;
+        if (isActive()) paneHandlerTargetsRef.current?.handleSystemPromptChange(prompt);
+      },
+      onSystemToolsChange: (tools) => {
+        ensureReport().systemTools = tools;
+        if (isActive()) paneHandlerTargetsRef.current?.handleSystemToolsChange(tools);
+      },
+      onSystemInfoLoaderChange: (loader) => {
+        ensureReport().systemInfoLoader = loader;
+        if (isActive()) paneHandlerTargetsRef.current?.handleSystemInfoLoaderChange(loader);
+      },
+      onSessionStatsChange: (stats) => {
+        ensureReport().sessionStats = stats;
+        if (isActive()) paneHandlerTargetsRef.current?.handleSessionStatsChange(stats);
+      },
+      onContextUsageChange: (usage) => {
+        ensureReport().contextUsage = usage;
+        if (isActive()) paneHandlerTargetsRef.current?.handleContextUsageChange(usage);
+      },
+      onAgentEnd: () => {
+        paneHandlerTargetsRef.current?.handlePaneAgentEnd(sessionId);
+      },
+      onAttentionNeeded: (request) => {
+        if (isActive()) paneHandlerTargetsRef.current?.handleAttentionNeeded(request);
+      },
+    };
+    paneReportHandlersRef.current.set(sessionId, handlers);
+    return handlers;
+  }, []);
+
+  // Persist the open tabs so a reload restores them.
+  useEffect(() => {
+    saveOpenSessionTabs(openTabIds);
+  }, [openTabIds]);
+
+  // Forget tabs and completion markers for conversations that no longer exist.
+  // The visible session is kept even before the catalogue lists it (a session
+  // just created inside the composer is transient for one refresh).
+  useEffect(() => {
+    if (sessionCatalog.length === 0) return;
+    const known = new Set(sessionCatalog.map((session) => session.id));
+    if (selectedSession?.id) known.add(selectedSession.id);
+    setOpenTabIds((ids) => {
+      const next = ids.filter((id) => known.has(id));
+      return next.length === ids.length ? ids : next;
+    });
+    setCompletedAt((completed) => pruneCompletionTimes(completed, known));
+  }, [sessionCatalog, selectedSession?.id]);
+
+  // Pull the newly visible pane's last report into the top-bar panels, and
+  // clear them when the composer is shown instead of a conversation.
+  useEffect(() => {
+    const targets = paneHandlerTargetsRef.current;
+    if (!targets) return;
+    const id = selectedSession?.id;
+    const report = id ? paneReportsRef.current.get(id) : null;
+    if (!id || !report) {
+      targets.handleBranchDataChange([], null, () => {}, false);
+      targets.handleSystemPromptChange(null);
+      targets.handleSystemToolsChange(null);
+      targets.handleSystemInfoLoaderChange(null);
+      targets.handleSessionStatsChange(null);
+      targets.handleContextUsageChange(null);
+      return;
+    }
+    targets.handleBranchDataChange(report.branchTree, report.branchLeafId, report.branchLeafChange ?? (() => {}), report.branchLocked);
+    targets.handleSystemPromptChange(report.systemPrompt);
+    targets.handleSystemToolsChange(report.systemTools);
+    targets.handleSystemInfoLoaderChange(report.systemInfoLoader);
+    targets.handleSessionStatsChange(report.sessionStats);
+    targets.handleContextUsageChange(report.contextUsage);
+  }, [selectedSession?.id]);
   const handleSessionStatsChange = useCallback((stats: SessionStatsInfo | null) => {
     setSessionStats(stats);
   }, []);
@@ -511,20 +743,20 @@ export function AppShell() {
   // Same @mention format as the chat input's @ autocomplete, so the agent's
   // read tool resolves it the same way (it strips the @ prefix).
   const handleAtMention = useCallback((relativePath: string, isDir: boolean) => {
-    chatInputRef.current?.insertText(buildAtMentionText(relativePath, isDir));
+    activeChatInputRef().current?.insertText(buildAtMentionText(relativePath, isDir));
     if (isMobile) { setRightPanelOpen(false); setSidebarOpen(false); }
-  }, [isMobile]);
+  }, [activeChatInputRef, isMobile]);
 
   const handleAtMentions = useCallback((relativePaths: string[]) => {
     const mentions = buildFileAtMentionsText(relativePaths);
-    if (mentions) chatInputRef.current?.insertText(mentions);
+    if (mentions) activeChatInputRef().current?.insertText(mentions);
     if (isMobile) { setRightPanelOpen(false); setSidebarOpen(false); }
-  }, [isMobile]);
+  }, [activeChatInputRef, isMobile]);
 
   const handleFileLineMention = useCallback((relativePath: string, startLine: number, endLine: number) => {
-    chatInputRef.current?.insertText(buildFileLineMentionText(relativePath, startLine, endLine));
+    activeChatInputRef().current?.insertText(buildFileLineMentionText(relativePath, startLine, endLine));
     if (isMobile) { setRightPanelOpen(false); setSidebarOpen(false); }
-  }, [isMobile]);
+  }, [activeChatInputRef, isMobile]);
 
   const initialSessionId = initialNavigation.sessionId;
   const [activeCwd, setActiveCwd] = useState<string | null>(null);
@@ -645,7 +877,7 @@ export function AppShell() {
       // the null-session welcome mount from the switch would never load
       // the restored session's messages.
       setSelectedSession(s);
-      setSessionKey((k) => k + 1);
+      openSessionTab(s.id);
       if (new URLSearchParams(window.location.search).get("session") !== s.id) {
         router.replace(`?session=${encodeURIComponent(s.id)}`, { scroll: false });
       }
@@ -662,7 +894,7 @@ export function AppShell() {
       .catch(() => {
         // Network hiccup: keep the remembered session for a later retry.
       });
-  }, [router, sessionCatalog]);
+  }, [router, sessionCatalog, openSessionTab]);
 
   const handleCwdChange = useCallback((
     cwd: string | null,
@@ -738,6 +970,27 @@ export function AppShell() {
     router.replace(typeof window !== "undefined" ? window.location.pathname : "/", { scroll: false });
   }, [activeCwd, activeFileTabId, invalidateWorkspaceRestore, newSessionCwd, router, selectedSession, restoreWorkspaceContext]);
 
+  /** Show a fresh composer for `cwd` and clear the per-session panels. */
+  const startComposerFor = useCallback((cwd: string | null) => {
+    invalidateWorkspaceRestore();
+    const draftId = typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    setNewSessionDraftId(draftId);
+    activeNewSessionDraftKeyRef.current = cwd ? `new:${draftId}:${cwd}` : null;
+    setSelectedSession(null);
+    setNewSessionCwd(cwd);
+    setSessionKey((k) => k + 1);
+    setBranchTree([]);
+    setBranchActiveLeafId(null);
+    setBranchSwitchLocked(false);
+    setSystemPrompt(null);
+    setSystemTools(null);
+    setSystemInfoLoading(false);
+    setActiveTopPanel(null);
+    router.replace(cwd ? `?cwd=${encodeURIComponent(cwd)}` : (typeof window !== "undefined" ? window.location.pathname : "/"), { scroll: false });
+  }, [invalidateWorkspaceRestore, router]);
+
   const handleSelectSession = useCallback((session: SessionInfo, isRestore = false, entryId?: string, blockIndex?: number) => {
     setSearchTarget(entryId ? { sessionId: session.id, entryId, blockIndex } : null);
     invalidateWorkspaceRestore();
@@ -772,7 +1025,9 @@ export function AppShell() {
     }
     setNewSessionCwd(null);
     setSelectedSession(session);
-    setSessionKey((k) => k + 1);
+    // Opening the conversation adds its tab (unless already open) and clears
+    // its "done" marker; the pane mounts once and is kept after that.
+    openSessionTab(session.id);
     setBranchTree([]);
     setBranchActiveLeafId(null);
     setBranchSwitchLocked(false);
@@ -795,7 +1050,7 @@ export function AppShell() {
     if (!isRestore || new URLSearchParams(window.location.search).get("session") !== session.id) {
       router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
     }
-  }, [activeCwd, activeFileTabId, invalidateWorkspaceRestore, router, isMobile, newSessionCwd, selectedSession]);
+  }, [activeCwd, activeFileTabId, invalidateWorkspaceRestore, router, isMobile, newSessionCwd, openSessionTab, selectedSession]);
 
   const handleNewSession = useCallback((sessionId: string, cwd: string) => {
     invalidateWorkspaceRestore();
@@ -868,9 +1123,10 @@ export function AppShell() {
     activeNewSessionDraftKeyRef.current = null;
     setNewSessionCwd(null);
     setSelectedSession(session);
+    openSessionTab(session.id);
     hydrateSelectedSession(session.id);
     router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
-  }, [invalidateWorkspaceRestore, router, hydrateSelectedSession]);
+  }, [invalidateWorkspaceRestore, router, hydrateSelectedSession, openSessionTab]);
 
   const deliverSessionNotification = useCallback(({
     targetSession,
@@ -927,6 +1183,27 @@ export function AppShell() {
       tag: targetSession ? `pi-session-complete:${targetSession.id}` : "pi-session-complete",
     });
   }, [deliverSessionNotification, hydrateSelectedSession, selectedSession, translate]);
+
+  /**
+   * Completion of one chat pane: refresh the catalogue, hydrate the finished
+   * conversation, and notify for that conversation rather than whichever tab
+   * happens to be visible.
+   */
+  const handlePaneAgentEnd = useCallback((sessionId: string) => {
+    setRefreshKey((key) => key + 1);
+    setExplorerRefreshKey((key) => key + 1);
+    const session = sessionsByIdRef.current.get(sessionId) ?? null;
+    if (!session) return;
+    if (activeSessionIdRef.current === sessionId) hydrateSelectedSession(sessionId);
+    if (session.relation?.kind === "subagent") return;
+    if (!shouldShowBrowserNotification()) return;
+    deliverSessionNotification({
+      targetSession: session,
+      title: session.name ?? translate("i18n.sessionComplete"),
+      body: translate("i18n.taskFinished"),
+      tag: `pi-session-complete:${session.id}`,
+    });
+  }, [deliverSessionNotification, hydrateSelectedSession, translate]);
 
   const handleAttentionNeeded = useCallback((request: BlockingExtensionUiRequest) => {
     if (selectedSession?.relation?.kind === "subagent") return;
@@ -987,16 +1264,16 @@ export function AppShell() {
     invalidateWorkspaceRestore();
     activeNewSessionDraftKeyRef.current = null;
     setRefreshKey((k) => k + 1);
-    setSessionKey((k) => k + 1);
     setNewSessionCwd(null);
     setSelectedSession((prev) => ({
       ...(prev ?? { path: "", cwd: "", created: "", modified: "", messageCount: 0, firstMessage: "" }),
       id: newSessionId,
       transient: false,
     }));
+    openSessionTab(newSessionId);
     hydrateSelectedSession(newSessionId);
     router.replace(`?session=${encodeURIComponent(newSessionId)}`, { scroll: false });
-  }, [invalidateWorkspaceRestore, router, hydrateSelectedSession]);
+  }, [invalidateWorkspaceRestore, router, hydrateSelectedSession, openSessionTab]);
 
   const handleAskInNewChat = useCallback(async (
     prompt: string,
@@ -1019,27 +1296,13 @@ export function AppShell() {
   const handleSessionDeleted = useCallback((sessionId: string) => {
     invalidateWorkspaceRestore();
     setRefreshKey((k) => k + 1);
+    setOpenTabIds((ids) => removeOpenSessionTab(ids, sessionId));
+    paneReportsRef.current.delete(sessionId);
     if (selectedSession?.id === sessionId) {
       clearTabOpenSession(sessionId);
-      const cwd = selectedSession.cwd;
-      const draftId = typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-      setNewSessionDraftId(draftId);
-      activeNewSessionDraftKeyRef.current = cwd ? `new:${draftId}:${cwd}` : null;
-      setSelectedSession(null);
-      setNewSessionCwd(cwd ?? null);
-      setSessionKey((k) => k + 1);
-      setBranchTree([]);
-      setBranchActiveLeafId(null);
-      setBranchSwitchLocked(false);
-      setSystemPrompt(null);
-      setSystemTools(null);
-      setSystemInfoLoading(false);
-      setActiveTopPanel(null);
-      router.replace(cwd ? `?cwd=${encodeURIComponent(cwd)}` : (typeof window !== "undefined" ? window.location.pathname : "/"), { scroll: false });
+      startComposerFor(selectedSession.cwd ?? null);
     }
-  }, [invalidateWorkspaceRestore, selectedSession, router]);
+  }, [invalidateWorkspaceRestore, selectedSession, startComposerFor]);
 
   const handleOpenFile = useCallback((
     filePath: string,
@@ -1112,6 +1375,64 @@ export function AppShell() {
   }, [selectedSession]);
 
   // Show chat area if a session is selected, or if we have a cwd to start a new session in
+  // Open tabs resolved against the live catalogue. Ids whose sessions are not
+  // loaded yet stay in the stored list and appear as soon as the list arrives.
+  const openTabSessions = useMemo(() => {
+    const byId = new Map(sessionsWithSelection.map((session) => [session.id, session]));
+    return openTabIds
+      .map((id) => byId.get(id))
+      .filter((session): session is SessionInfo => session !== undefined);
+  }, [openTabIds, sessionsWithSelection]);
+
+  const sessionTabItems: SessionTabItem[] = openTabSessions.map((session) => ({
+    id: session.id,
+    label: sessionTabLabel(session),
+    status: deriveSessionActivityStatus(session.id, runningSessionIds, completedAt),
+  }));
+
+  const handleSelectSessionTab = useCallback((sessionId: string) => {
+    const session = sessionsByIdRef.current.get(sessionId);
+    if (session) handleSelectSession(session);
+  }, [handleSelectSession]);
+
+  const handleCloseSessionTab = useCallback((sessionId: string) => {
+    const wasActive = activeSessionIdRef.current === sessionId;
+    const nextActiveId = nextActiveTabAfterClose(openTabIdsRef.current, sessionId, activeSessionIdRef.current);
+    setOpenTabIds((ids) => removeOpenSessionTab(ids, sessionId));
+    setTabReloads((reloads) => {
+      if (!(sessionId in reloads)) return reloads;
+      const next = { ...reloads };
+      delete next[sessionId];
+      return next;
+    });
+    paneReportsRef.current.delete(sessionId);
+    if (!wasActive) return;
+    const nextSession = nextActiveId ? sessionsByIdRef.current.get(nextActiveId) : undefined;
+    if (nextSession) {
+      handleSelectSession(nextSession);
+      return;
+    }
+    // No tab left: fall back to the composer of the closed conversation's project.
+    startComposerFor(sessionsByIdRef.current.get(sessionId)?.cwd ?? null);
+  }, [handleSelectSession, startComposerFor]);
+
+  const handleReorderSessionTab = useCallback((from: number, to: number) => {
+    setOpenTabIds((ids) => moveOpenSessionTab(ids, from, to));
+  }, []);
+
+  // Wire the per-pane report callbacks to the live handlers. Assigned during
+  // render so the cached pane callbacks always call the current versions.
+  paneHandlerTargetsRef.current = {
+    handleBranchDataChange,
+    handleSystemPromptChange,
+    handleSystemToolsChange,
+    handleSystemInfoLoaderChange,
+    handleSessionStatsChange,
+    handleContextUsageChange,
+    handleAttentionNeeded,
+    handlePaneAgentEnd,
+  };
+
   const effectiveNewSessionCwd = newSessionCwd ?? (selectedSession === null && activeCwd ? activeCwd : null);
   const newSessionDraftKey = selectedSession === null && effectiveNewSessionCwd
     ? `new:${newSessionDraftId}:${effectiveNewSessionCwd}`
@@ -1167,13 +1488,13 @@ export function AppShell() {
       setProjectTrust(data);
       setProjectTrustDialogOpen(false);
       setModelsRefreshKey((key) => key + 1);
-      setSessionKey((key) => key + 1);
+      reloadActiveChat();
     } catch (error) {
       setProjectTrustError({ error: error instanceof Error ? error.message : String(error) });
     } finally {
       setProjectTrustBusy(false);
     }
-  }, [projectTrustBusy, projectTrustCwd]);
+  }, [projectTrustBusy, projectTrustCwd, reloadActiveChat]);
 
   // The restricted-mode banner and Settings › MCP's trust notice open the same dialog.
   const openProjectTrustDialog = useCallback(() => {
@@ -2333,44 +2654,120 @@ export function AppShell() {
         {isMobile && renderProjectTrustWarning(true)}
         </div>
 
+        {/* Conversation tabs — one per open chat, visible ones switch without reloading */}
+        {sessionTabItems.length > 0 && (
+          <SessionTabBar
+            tabs={sessionTabItems}
+            activeTabId={selectedSession?.id ?? null}
+            onSelectTab={handleSelectSessionTab}
+            onCloseTab={handleCloseSessionTab}
+            onReorderTab={handleReorderSessionTab}
+          />
+        )}
+
         {/* Chat content */}
         <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
           {showChat ? (
-            <ChatWindow
-              key={sessionKey}
-              session={selectedSession}
-              searchTarget={searchTarget?.sessionId === selectedSession?.id ? searchTarget : null}
-              onSearchTargetHandled={handleSearchTargetHandled}
-              initialScrollPosition={selectedSession ? sessionScrollPositionsRef.current.get(selectedSession.id) ?? null : null}
-              onScrollPositionChange={handleSessionScrollPositionChange}
-              sessionRunning={Boolean(selectedSession && runningSessionIds.has(selectedSession.id))}
-              newSessionCwd={effectiveNewSessionCwd}
-              newSessionDraftKey={newSessionDraftKey}
-              onAgentEnd={handleAgentEnd}
-              onAttentionNeeded={handleAttentionNeeded}
-              onSessionCreated={handleSessionCreated}
-              onSessionForked={handleSessionForked}
-              modelsRefreshKey={modelsRefreshKey}
-              chatInputRef={chatInputRef}
-              onBranchDataChange={handleBranchDataChange}
-              onSystemPromptChange={handleSystemPromptChange}
-              onSystemToolsChange={handleSystemToolsChange}
-              onSystemInfoLoaderChange={handleSystemInfoLoaderChange}
-              onSessionStatsChange={handleSessionStatsChange}
-              onSessionStatsPanelOpen={openSessionStatsPanel}
-              onOpenSettings={openSettingsSection}
-              onContextUsageChange={handleContextUsageChange}
-              onOpenFile={handleOpenLinkedFile}
-              onOpenSession={handleOpenSession}
-              onAskInNewChat={handleAskInNewChat}
-              quoteSelectionEnabled={quoteSelectionEnabled}
-              initialPrompt={pendingQuotePrompt?.sessionId === selectedSession?.id ? pendingQuotePrompt?.text : undefined}
-              onInitialPromptConsumed={() => setPendingQuotePrompt(null)}
-              soundEnabled={soundEnabled}
-              onSoundToggle={onSoundToggle}
-              playDoneSound={playDoneSound}
-              unlockAudio={unlockAudio}
-            />
+            <>
+              {selectedSession === null && (
+                <div style={{ position: "absolute", inset: 0 }}>
+                  <ChatWindow
+                    key={sessionKey}
+                    session={null}
+                    searchTarget={null}
+                    onSearchTargetHandled={handleSearchTargetHandled}
+                    initialScrollPosition={null}
+                    onScrollPositionChange={handleSessionScrollPositionChange}
+                    sessionRunning={false}
+                    newSessionCwd={effectiveNewSessionCwd}
+                    newSessionDraftKey={newSessionDraftKey}
+                    onAgentEnd={handleAgentEnd}
+                    onAttentionNeeded={handleAttentionNeeded}
+                    onSessionCreated={handleSessionCreated}
+                    onSessionForked={handleSessionForked}
+                    modelsRefreshKey={modelsRefreshKey}
+                    chatInputRef={chatInputRef}
+                    onBranchDataChange={handleBranchDataChange}
+                    onSystemPromptChange={handleSystemPromptChange}
+                    onSystemToolsChange={handleSystemToolsChange}
+                    onSystemInfoLoaderChange={handleSystemInfoLoaderChange}
+                    onSessionStatsChange={handleSessionStatsChange}
+                    onSessionStatsPanelOpen={openSessionStatsPanel}
+                    onOpenSettings={openSettingsSection}
+                    onContextUsageChange={handleContextUsageChange}
+                    onOpenFile={handleOpenLinkedFile}
+                    onOpenSession={handleOpenSession}
+                    onAskInNewChat={handleAskInNewChat}
+                    quoteSelectionEnabled={quoteSelectionEnabled}
+                    initialPrompt={undefined}
+                    onInitialPromptConsumed={handleInitialPromptConsumed}
+                    soundEnabled={soundEnabled}
+                    onSoundToggle={onSoundToggle}
+                    playDoneSound={playDoneSound}
+                    unlockAudio={unlockAudio}
+                  />
+                </div>
+              )}
+              {/* Every other open conversation stays mounted and hidden: its
+                  stream keeps running, and its last reported panel data is
+                  swapped in when the tab becomes visible. */}
+              {openTabSessions.map((session) => {
+                const active = session.id === selectedSession?.id;
+                const paneHandlers = paneReportHandlersFor(session.id);
+                return (
+                  <div
+                    key={session.id}
+                    data-session-pane={session.id}
+                    data-session-pane-active={active ? "true" : "false"}
+                    inert={!active}
+                    aria-hidden={!active}
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      visibility: active ? "visible" : "hidden",
+                      pointerEvents: active ? "auto" : "none",
+                      zIndex: active ? 2 : 1,
+                    }}
+                  >
+                    <ChatWindow
+                      key={`${session.id}:${tabReloads[session.id] ?? 0}`}
+                      session={session}
+                      searchTarget={searchTarget?.sessionId === session.id ? searchTarget : null}
+                      onSearchTargetHandled={handleSearchTargetHandled}
+                      initialScrollPosition={sessionScrollPositionsRef.current.get(session.id) ?? null}
+                      onScrollPositionChange={handleSessionScrollPositionChange}
+                      sessionRunning={runningSessionIds.has(session.id)}
+                      newSessionCwd={null}
+                      newSessionDraftKey={null}
+                      onAgentEnd={paneHandlers.onAgentEnd}
+                      onAttentionNeeded={paneHandlers.onAttentionNeeded}
+                      onSessionCreated={handleSessionCreated}
+                      onSessionForked={handleSessionForked}
+                      modelsRefreshKey={modelsRefreshKey}
+                      chatInputRef={chatInputRefForSession(session.id)}
+                      onBranchDataChange={paneHandlers.onBranchDataChange}
+                      onSystemPromptChange={paneHandlers.onSystemPromptChange}
+                      onSystemToolsChange={paneHandlers.onSystemToolsChange}
+                      onSystemInfoLoaderChange={paneHandlers.onSystemInfoLoaderChange}
+                      onSessionStatsChange={paneHandlers.onSessionStatsChange}
+                      onSessionStatsPanelOpen={openSessionStatsPanel}
+                      onOpenSettings={openSettingsSection}
+                      onContextUsageChange={paneHandlers.onContextUsageChange}
+                      onOpenFile={handleOpenLinkedFile}
+                      onOpenSession={handleOpenSession}
+                      onAskInNewChat={handleAskInNewChat}
+                      quoteSelectionEnabled={quoteSelectionEnabled}
+                      initialPrompt={pendingQuotePrompt?.sessionId === session.id ? pendingQuotePrompt.text : undefined}
+                      onInitialPromptConsumed={handleInitialPromptConsumed}
+                      soundEnabled={soundEnabled}
+                      onSoundToggle={onSoundToggle}
+                      playDoneSound={playDoneSound}
+                      unlockAudio={unlockAudio}
+                    />
+                  </div>
+                );
+              })}
+            </>
           ) : initialCwdStatus === "validating" ? (
             <div
               role="status"
@@ -2555,7 +2952,7 @@ export function AppShell() {
           setSettingsSection(null);
           setModelsRefreshKey((key) => key + 1);
         }}
-        onSessionReloaded={() => setSessionKey((key) => key + 1)}
+        onSessionReloaded={reloadActiveChat}
         projectTrust={projectTrust}
         onOpenTrustDialog={openProjectTrustDialog}
         onProjectTrustChanged={handleProjectTrustChanged}

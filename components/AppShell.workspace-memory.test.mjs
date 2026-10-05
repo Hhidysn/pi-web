@@ -42,7 +42,7 @@ test("all active-session transitions share one persistence effect", () => {
 test("keeps chat scroll positions in page memory by session id", () => {
   assert.match(source, /useRef\(new Map<string, ChatScrollPosition>\(\)\)/);
   assert.match(source, /sessionScrollPositionsRef\.current\.set\(sessionId, position\)/);
-  assert.match(source, /initialScrollPosition=\{selectedSession \? sessionScrollPositionsRef\.current\.get\(selectedSession\.id\) \?\? null : null\}/);
+  assert.match(source, /initialScrollPosition=\{sessionScrollPositionsRef\.current\.get\(session\.id\) \?\? null\}/);
   assert.match(source, /onScrollPositionChange=\{handleSessionScrollPositionChange\}/);
   assert.doesNotMatch(source, /localStorage[^\n]*sessionScroll/i);
 });
@@ -101,6 +101,7 @@ test("New restores the draft after session navigation and workspace auto-restore
         selectedSession: null,
         sessionCatalog: [],
         sessionKey: 0,
+        openSessionTab() {},
       });
       context.invalidateWorkspaceRestore = () => context.workspaceRestoreTokenRef.current++;
       for (const [setter] of callbacks.matchAll(/\bset[A-Z]\w*(?=\()/g)) {
