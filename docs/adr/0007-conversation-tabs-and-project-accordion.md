@@ -51,8 +51,9 @@ remote stay, so the diff stays confined to the UI layer.
 - **Browser-side status** (`lib/session-status.ts`). `running` comes from the
   running set the sidebar already polls (every 2.5 s), `done` is "left the
   running set less than 30 minutes ago", `idle` is everything else. Opening a
-  conversation clears its marker, and a bounded timer expires the rest. No new
-  endpoint, no new field on the wire.
+  conversation clears its marker; a timer re-armed per expiry drops the rest,
+  and the timestamps are stored so the window survives a reload. No new endpoint,
+  no new field on the wire.
 - **Project accordion** (`lib/project-accordion.ts`, `SessionSidebar`). The
   sidebar lists every project as a group (path, conversation count, activity,
   a "+" that starts a conversation there), each group expandable to its
@@ -119,10 +120,18 @@ reason the fork exists at all.
   contain define no DOM ids or label associations — no duplicate-id hazard. Any
   new chat component that adds an `id` must scope it per session.
 - Hidden panes keep their `useAgentSession` effects running, so a run keeps
-  streaming into a background tab; the stream still closes on the usual
-  grace window after the run settles. Because a mounted pane counts as a
-  warm/selected session only while visible, no tab holds a session-liveness
-  lease forever.
+  streaming into a background tab; the stream still closes on the usual grace
+  window after the run settles. `useAgentSession` takes an `active` flag for
+  this: a pane that is mounted but not shown renews its liveness lease and stays
+  warm only while its agent runs, so idle background tabs do not each hold a
+  session wrapper alive. Switching to the tab reconnects the stream and renews
+  the lease; the pane was never unmounted, so nothing is re-read.
+- Global side effects of a hidden pane are gated on visibility, because the pane
+  wrapper cannot contain them: the Escape stop shortcut is registered per
+  conversation (`registerAbortHandler(owner, …)`), the quote popover (portaled to
+  `document.body`) renders only while the pane is shown, and a completion sound
+  is played once — by the pane's own stream when it is mounted, or by the
+  sidebar's poll for conversations that are not mounted at all.
 - Sidebar virtualization changed shape: group headers and conversation rows have
   different heights, so a list of only one project no longer windows through
   `getSessionListIndices`. The uniform-height helper stays for compatibility and
@@ -130,10 +139,11 @@ reason the fork exists at all.
 - Selecting a conversation still moves the workspace to that conversation's cwd
   (the file explorer, terminal and Git diff follow it), which now happens as a
   side effect of switching tabs.
-- The "done" marker is time based and client-side, so a browser tab left open
-  for hours drops markers on its own; a page reload loses them
-  (`pi-web:open-session-tabs` stores ids only). The running set, by contrast, is
-  always the server's answer.
+- The "done" marker is time based and client-side. Timestamps live in
+  `localStorage` (`pi-web:session-completion-times`) and expire on a timer, so a
+  reload keeps showing a recent completion and an idle tab drops it after the
+  window. Opening the conversation still clears its marker immediately. The
+  running set, by contrast, is always the server's answer.
 - Test suite changes: `e2e/session-tabs.mjs` covers tabs, accordion and status
   markers; `e2e/run.mjs` scopes chat assertions to the visible pane
   (`[data-session-pane-active='true']`) and clears stored tabs where it needs a

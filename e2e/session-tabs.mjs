@@ -224,12 +224,73 @@ try {
   await tab("Tabs alpha question").locator("[aria-label='Done']").waitFor({ state: "detached", timeout: 10_000 });
   await page.screenshot({ path: join(artifacts, "session-status.png") });
 
+  // 9. Escape belongs to the conversation on screen. The state endpoints are
+  //    mocked, so the hidden conversation looks busy while the shown one is idle.
+  const agentPosts = [];
+  await page.route("**/api/agent/*", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() === "POST" && /^\/api\/agent\/[^/]+$/.test(url.pathname)) {
+      agentPosts.push({ id: decodeURIComponent(url.pathname.split("/").pop()), body: request.postData() });
+      await route.fulfill({ json: { success: true } });
+      return;
+    }
+    await route.continue().catch(() => {});
+  });
+  await page.route("**/api/sessions/*/state", (route) => {
+    const id = decodeURIComponent(new URL(route.request().url()).pathname.split("/")[3]);
+    return route.fulfill({
+      json: id === BETA
+        ? { running: true, state: { isStreaming: true, isPromptRunning: false } }
+        : { running: false },
+    });
+  });
+  const abortPosts = () => agentPosts.filter((post) => /"abort"/.test(post.body ?? ""));
+  // Reload so both panes read the mocked state while mounting.
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await tab("Tabs alpha question").waitFor();
+  await tab("Tabs beta question").click();
+  await page.getByText("Tabs beta answer", { exact: true }).waitFor();
+  await tab("Tabs alpha question").click();
+  await page.waitForFunction(() => {
+    const pane = document.querySelector("[data-session-pane-active='true']");
+    return pane !== null && pane.getAttribute("data-session-pane") !== null;
+  }, null, { timeout: 15_000 });
+  await page.keyboard.press("Escape");
+  await delay(600);
+  assert.deepEqual(abortPosts().map((post) => post.id), [],
+    "Escape must not stop a conversation that is only mounted in the background");
+  // The visible conversation's own run is the one Escape stops.
+  await tab("Tabs beta question").click();
+  await page.getByText("Tabs beta answer", { exact: true }).waitFor();
+  await delay(600);
+  await page.keyboard.press("Escape");
+  await delay(900);
+  assert.deepEqual(abortPosts().map((post) => post.id), [BETA],
+    "Escape stops the conversation the user is looking at");
+  await page.unroute("**/api/sessions/*/state");
+  await page.unroute("**/api/agent/*");
+
+  // 10. A mounted but hidden conversation stops holding its session warm: only
+  //     the visible pane renews its liveness lease (the renew interval is 30 s).
+  const leaseRequests = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    const match = /^\/api\/agent\/([^/]+)\/lease$/.exec(url.pathname);
+    if (match) leaseRequests.push(decodeURIComponent(match[1]));
+  });
+  await tab("Tabs alpha question").click();
+  await delay(35_000);
+  assert.ok(leaseRequests.includes(ALPHA), "the visible conversation keeps its session warm");
+  assert.ok(!leaseRequests.includes(BETA), "a hidden conversation releases its session once it is idle");
+
   const recoverableErrors = consoleErrors.filter((text) => !/favicon|manifest/i.test(text));
   assert.deepEqual(recoverableErrors, [], "browser errors while using tabs");
   await page.screenshot({ path: join(artifacts, "session-tabs-after-close.png") });
   console.log("PASS: conversation tabs keep panes mounted, switch without refetching, and restore after reload");
   console.log("PASS: the project accordion opens, collapses and starts conversations per project");
   console.log("PASS: running and finished conversations are marked on the tab and in the sidebar");
+  console.log("PASS: Escape and session liveness follow the visible conversation, not every mounted pane");
 } finally {
   await browser?.close().catch(() => {});
   server?.kill("SIGTERM");

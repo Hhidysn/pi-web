@@ -407,19 +407,22 @@ test("keeps the selected session warm while idle and renews its lease", () => {
   assert.match(source, /sessionRunning\?: boolean/);
   assert.match(
     source,
-    /const sid = session\?\.id;[\s\S]*?if \(!sid\) return;[\s\S]*?maintainEventsConnected\(sid\)/,
+    /const sid = session\?\.id;[\s\S]*?if \(!sid\) return;[\s\S]*?if \(!active\) return;[\s\S]*?maintainEventsConnected\(sid\)/,
   );
+  // The visible pane stays warm while idle; a mounted but hidden pane only
+  // while its agent runs (AppShell passes active=false for background tabs).
+  assert.match(source, /if \(!active && !agentRunning\) return;/);
   assert.match(source, /sessionPropIdRef\.current === sid/);
   assert.match(source, /SESSION_LEASE_RENEW_INTERVAL_MS = 30_000/);
   assert.match(source, /fetch\(`\/api\/agent\/\$\{encodeURIComponent\(sid\)\}\/lease`/);
   assert.match(source, /setInterval\(\(\) => void renewLease\(\), SESSION_LEASE_RENEW_INTERVAL_MS\)/);
   assert.match(source, /result\.renewed === 0[\s\S]*?closeEvents\(\)[\s\S]*?maintainEventsConnected\(sid\)/);
-  assert.match(source, /if \(sessionPropIdRef\.current === sid\) \{[\s\S]*?cancelEventStreamGrace\(\);[\s\S]*?return;/);
+  assert.match(source, /if \(sessionPropIdRef\.current === sid && paneActiveRef\.current\) \{[\s\S]*?cancelEventStreamGrace\(\);[\s\S]*?return;/);
   assert.match(source, /maintainEventsConnected\(sid\)/);
   assert.doesNotMatch(source, /void connectEvents\(/);
   assert.match(chatWindowSource, /sessionRunning\?: boolean/);
   assert.match(chatWindowSource, /session, sessionRunning, newSessionCwd/);
-  assert.match(appShellSource, /runningSessionIds\.has\(selectedSession\.id\)/);
+  assert.match(appShellSource, /sessionRunning=\{runningSessionIds\.has\(session\.id\)\}/);
   assert.match(appShellSource, /onRunningSessionIdsChange=\{handleRunningSessionIdsChange\}/);
 });
 
@@ -434,7 +437,7 @@ test("opens the selected session's event stream even when Strict Mode re-runs ef
     source.indexOf("  // Keep the selected session warm even while its agent is idle."),
     source.indexOf("    const renewLease = async () => {"),
   );
-  assert.match(warmSource, /sessionHookMountedRef\.current = true;\s*maintainEventsConnected\(sid\);/);
+  assert.match(warmSource, /sessionHookMountedRef\.current = true;\s*if \(!active\) return;\s*maintainEventsConnected\(sid\);/);
   assert.ok(
     warmSource.indexOf("sessionHookMountedRef.current = true;")
       < warmSource.indexOf("maintainEventsConnected(sid);"),

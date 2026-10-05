@@ -94,14 +94,19 @@ export function SessionTabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onRe
     >
       {tabs.map((tab, index) => {
         const isActive = tab.id === activeTabId;
+        // With the composer shown no tab is active; the first one stays
+        // focusable so the strip is still reachable from the keyboard.
+        const isTabStop = isActive || (activeTabId === null && index === 0);
         return (
           <div
             key={tab.id}
             ref={isActive ? activeTabRef : undefined}
+            id={`session-tab-${tab.id}`}
             role="tab"
             aria-selected={isActive}
+            aria-controls={`session-pane-${tab.id}`}
             aria-label={tab.label}
-            tabIndex={isActive ? 0 : -1}
+            tabIndex={isTabStop ? 0 : -1}
             draggable
             title={tab.label}
             onDragStart={(event) => {

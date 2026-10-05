@@ -185,6 +185,10 @@ export interface UseAgentSessionOptions {
   onOpenSettings?: (section: SettingsSection) => void;
   setToolPreset?: (preset: ToolPreset) => void;
   deferInitialScroll?: boolean;
+  /** False while the conversation is mounted but another tab is shown: its run
+   *  keeps streaming, but an idle pane no longer holds the session warm or
+   *  renews its liveness lease on behalf of a conversation nobody is watching. */
+  active?: boolean;
 }
 
 export type ThinkingLevelOption = "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -316,7 +320,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const {
     session, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked,
     modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsPanelOpen,
-    onOpenSettings,
+    onOpenSettings, active = true,
   } = opts;
 
   const isNew = session === null && newSessionCwd !== null;
@@ -379,6 +383,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const eventStreamGraceActiveRef = useRef(false);
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
   const sessionPropIdRef = useRef<string | null>(session?.id ?? null);
+  // Mirrors `active` for the callbacks below (shouldMaintain, stream close) that
+  // must not re-create their closures on every tab switch.
+  const paneActiveRef = useRef(active);
+  paneActiveRef.current = active;
   // False while the session carries no tool selection of its own, so its loadout
   // follows settings.json defaultTools and the picker must say so rather than
   // labelling it with whichever preset the resolved tools happen to match.
@@ -447,7 +455,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         && (
           agentRunningRef.current
           || eventStreamGraceActiveRef.current
-          || sessionPropIdRef.current === sid
+          || (sessionPropIdRef.current === sid && paneActiveRef.current)
         )
       ),
       readinessTimeoutMs: EVENT_STREAM_READY_TIMEOUT_MS,
@@ -962,7 +970,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, []);
 
   // Keep the selected session warm even while its agent is idle. The SSE lease
-  // is renewed separately below and expires if the browser disappears.
+  // is renewed separately below and expires if the browser disappears. A pane
+  // that is mounted but hidden only stays warm while it runs (see shouldMaintain).
   useEffect(() => {
     const sid = session?.id;
     if (!sid) return;
@@ -972,15 +981,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // so without re-asserting it here shouldMaintain() refuses the connection
     // and the selected session never opens its event stream.
     sessionHookMountedRef.current = true;
+    if (!active) return;
     maintainEventsConnected(sid);
     return () => {
       if (sessionIdRef.current === sid) eventConnectionRef.current?.close();
     };
-  }, [maintainEventsConnected, session?.id]);
+  }, [maintainEventsConnected, session?.id, active]);
 
   useEffect(() => {
     const sid = session?.id;
     if (!sid) return;
+    // A hidden pane renews only while its agent runs, so a background
+    // conversation keeps its run alive without holding the session warm forever.
+    if (!active && !agentRunning) return;
     let disposed = false;
     let renewing = false;
 
@@ -1020,7 +1033,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [closeEvents, maintainEventsConnected, session?.id]);
+  }, [active, agentRunning, closeEvents, maintainEventsConnected, session?.id]);
 
   const respondToExtensionUi = useCallback(async (
     request: ExtensionUiDialogRequest,
@@ -1134,7 +1147,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, [onAgentEnd]);
 
   const scheduleEventStreamClose = useCallback((sid: string) => {
-    if (sessionPropIdRef.current === sid) {
+    // The visible conversation keeps its stream; a background pane lets it go
+    // after the idle grace, so several open tabs do not each hold a lease.
+    if (sessionPropIdRef.current === sid && paneActiveRef.current) {
       cancelEventStreamGrace();
       return;
     }

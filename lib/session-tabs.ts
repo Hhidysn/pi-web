@@ -104,8 +104,10 @@ export interface AddTabResult {
 }
 
 /**
- * Append a session id unless it is already open. At the cap, the oldest tab is
+ * Append a session id unless it is already open. At the cap, the oldest tabs are
  * dropped (the newly opened one stays); an already-open id keeps its position.
+ * The cap is re-read from storage on every open, so lowering it trims the list
+ * on the next open instead of only after a reload.
  */
 export function addOpenSessionTab(
   tabs: readonly string[],
@@ -113,11 +115,17 @@ export function addOpenSessionTab(
   maxTabs = DEFAULT_MAX_OPEN_SESSION_TABS,
 ): AddTabResult {
   if (!sessionId) return { tabs: [...tabs], droppedId: null };
-  if (tabs.includes(sessionId)) return { tabs: [...tabs], droppedId: null };
   const cap = Math.max(1, maxTabs);
+  if (tabs.includes(sessionId)) {
+    if (tabs.length <= cap) return { tabs: [...tabs], droppedId: null };
+    const others = tabs.filter((id) => id !== sessionId);
+    const kept = others.slice(Math.max(0, others.length - (cap - 1)));
+    return { tabs: [...kept, sessionId], droppedId: others[0] ?? null };
+  }
   const next = [...tabs, sessionId];
   if (next.length <= cap) return { tabs: next, droppedId: null };
   const droppedId = next.shift() ?? null;
+  while (next.length > cap) next.shift();
   return { tabs: next, droppedId };
 }
 

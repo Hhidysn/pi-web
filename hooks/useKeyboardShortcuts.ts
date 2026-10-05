@@ -3,17 +3,23 @@
 import { useEffect } from "react";
 
 // ---------------------------------------------------------------------------
-// Module-level registry — ChatWindow registers the abort handler here so that
-// the global Esc listener in AppShell can call it without prop-drilling.
+// Module-level registry — every mounted ChatWindow registers the abort handler
+// of its own conversation here so that the global Esc listener in AppShell can
+// call the visible one without prop-drilling. Keyed by session id (the fresh
+// composer registers as "composer"): with several conversations mounted at
+// once, a single slot would let a background pane answer — or clear — the
+// visible pane's Escape.
 // ---------------------------------------------------------------------------
-let globalAbortHandler: (() => void) | null = null;
+const abortHandlers = new Map<string, () => void>();
 
 /**
- * Register (or clear) the abort handler for the global Esc shortcut.
- * Call this from ChatWindow whenever agentRunning or handleAbort changes.
+ * Register (or clear) one conversation's abort handler.
+ * Call this from ChatWindow whenever pane visibility, agentRunning or
+ * handleAbort changes.
  */
-export function registerAbortHandler(handler: (() => void) | null): void {
-  globalAbortHandler = handler;
+export function registerAbortHandler(owner: string, handler: (() => void) | null): void {
+  if (handler) abortHandlers.set(owner, handler);
+  else abortHandlers.delete(owner);
 }
 
 /**
@@ -24,16 +30,26 @@ export function registerAbortHandler(handler: (() => void) | null): void {
  * listen on `document` or below and run before this one on `window`, and
  * closing them must not stop a run as well. Returns whether it stopped the
  * agent.
+ *
+ * `owner` is the visible conversation (its session id, or "composer" for the
+ * fresh composer). Without one, a single registered conversation is used, which
+ * keeps the shortcut working in tests and before the shell knows the owner.
  */
-export function handleGlobalEscape(event: KeyboardEvent): boolean {
-  if (event.key !== "Escape" || event.defaultPrevented || !globalAbortHandler) return false;
+export function handleGlobalEscape(event: KeyboardEvent, owner?: string | null): boolean {
+  if (event.key !== "Escape" || event.defaultPrevented) return false;
+  const handler = owner
+    ? abortHandlers.get(owner)
+    : abortHandlers.size === 1
+      ? [...abortHandlers.values()][0]
+      : undefined;
+  if (!handler) return false;
 
   const tag = (event.target as HTMLElement | null)?.tagName;
   // Let textarea/input handle Esc internally (ChatInput menus / stop).
   if (tag === "TEXTAREA" || tag === "INPUT") return false;
 
   event.preventDefault();
-  globalAbortHandler();
+  handler();
   return true;
 }
 
@@ -46,6 +62,9 @@ interface UseGlobalKeyboardShortcutsOptions {
   onNewSession?: (cwd: string) => void;
   /** The currently selected project directory (sidebar cwd). */
   activeCwd?: string | null;
+  /** Conversation whose Escape owns the stop shortcut (session id, or
+   *  "composer" for the fresh composer). */
+  abortOwner?: string | null;
 }
 
 /**
@@ -64,13 +83,13 @@ interface UseGlobalKeyboardShortcutsOptions {
 export function useGlobalKeyboardShortcuts(
   options: UseGlobalKeyboardShortcutsOptions,
 ): void {
-  const { onNewSession, activeCwd } = options;
+  const { onNewSession, activeCwd, abortOwner } = options;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       // ---- Esc: stop agent ----
       if (e.key === "Escape") {
-        handleGlobalEscape(e);
+        handleGlobalEscape(e, abortOwner);
         return;
       }
 
@@ -84,5 +103,5 @@ export function useGlobalKeyboardShortcuts(
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeCwd, onNewSession]);
+  }, [activeCwd, onNewSession, abortOwner]);
 }

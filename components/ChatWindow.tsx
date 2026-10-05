@@ -71,6 +71,10 @@ interface Props {
   onSoundToggle?: () => void;
   playDoneSound?: () => void;
   unlockAudio?: () => void;
+  /** False while the conversation is mounted but another tab is shown. Keeps
+   *  the pane's global side effects (Escape, quote popover, session liveness)
+   *  out of the way of the visible conversation. */
+  paneVisible?: boolean;
 }
 const CHAT_MINIMAP_WIDTH = 36;
 const CHAT_COLUMN_PADDING = 16;
@@ -227,7 +231,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, defaultExpanded = fa
   );
 }
 
-export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initialScrollPosition, onScrollPositionChange, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onOpenSettings, onContextUsageChange, onOpenFile, onOpenSession, onAskInNewChat, quoteSelectionEnabled = false, initialPrompt, onInitialPromptConsumed, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio }: Props) {
+export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initialScrollPosition, onScrollPositionChange, sessionRunning, newSessionCwd, newSessionDraftKey, onAgentEnd, onAttentionNeeded, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsChange, onSessionStatsPanelOpen, onOpenSettings, onContextUsageChange, onOpenFile, onOpenSession, onAskInNewChat, quoteSelectionEnabled = false, initialPrompt, onInitialPromptConsumed, soundEnabled = true, onSoundToggle, playDoneSound = () => {}, unlockAudio, paneVisible = true }: Props) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const completionNotificationsEnabled = session?.relation?.kind !== "subagent";
@@ -283,6 +287,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsPanelOpen,
     onOpenSettings,
     deferInitialScroll: Boolean(pendingScrollRestore),
+    active: paneVisible,
   });
   const sessionBusy = agentRunning || bashRunning;
   const [quotedSelection, setQuotedSelection] = useState<{
@@ -376,7 +381,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
   }, [quotedSelection, quoteInputOpen, quoteError]);
 
   useEffect(() => {
-    if (!quotedSelection) return;
+    if (!paneVisible || !quotedSelection) return;
     const onPointerDown = (event: PointerEvent) => {
       if (!quoteInputOpen && !quotePopoverRef.current?.contains(event.target as Node)) closeQuotedSelection();
     };
@@ -392,7 +397,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [quotedSelection, quoteInputOpen, quoteSubmitting, closeQuotedSelection]);
+  }, [paneVisible, quotedSelection, quoteInputOpen, quoteSubmitting, closeQuotedSelection]);
 
   const askSelectionHere = useCallback(() => {
     if (!quotedSelection) return;
@@ -443,10 +448,14 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
     playDoneSoundRef.current();
   }, [completionNotificationsEnabled, extensionDialog]);
 
-  // Register the abort handler for the global Esc shortcut
+  // Register the abort handler for the global Esc shortcut. The registry is
+  // keyed by conversation, so a mounted background pane never answers (or
+  // clears) the Escape meant for the visible one.
   useEffect(() => {
-    registerAbortHandler(sessionBusy ? handleAbort : null);
-  }, [sessionBusy, handleAbort]);
+    const owner = session?.id ?? "composer";
+    registerAbortHandler(owner, paneVisible && sessionBusy ? handleAbort : null);
+    return () => registerAbortHandler(owner, null);
+  }, [session?.id, paneVisible, sessionBusy, handleAbort]);
 
   // --- Lazy-load historical messages ---
   // Only render the last N messages initially. When the user scrolls to the
@@ -1244,7 +1253,7 @@ export function ChatWindow({ session, searchTarget, onSearchTargetHandled, initi
         </>}
       </div>
 
-      {quoteSelectionEnabled && quotedSelection && createPortal(
+      {paneVisible && quoteSelectionEnabled && quotedSelection && createPortal(
         <div
           ref={quotePopoverRef}
           role={quoteInputOpen ? "dialog" : "toolbar"}

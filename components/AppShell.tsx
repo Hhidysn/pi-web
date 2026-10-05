@@ -48,7 +48,11 @@ import {
 import {
   DONE_STATUS_WINDOW_MS,
   deriveSessionActivityStatus,
+  expireCompletionTimes,
+  loadCompletionTimes,
+  nextCompletionExpiry,
   pruneCompletionTimes,
+  saveCompletionTimes,
   withCompletionTimes,
   withoutCompletionTime,
 } from "@/lib/session-status";
@@ -179,9 +183,6 @@ export function AppShell() {
     }
   }, []);
   const notifiedAttentionRequestIdsRef = useRef(new Set<string>());
-  const handleBackgroundTaskDone = useCallback(() => {
-    if (soundEnabledRef.current) playDoneSound();
-  }, [playDoneSound, soundEnabledRef]);
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
   const [sessionCatalog, setSessionCatalog] = useState<SessionInfo[]>([]);
   const handleSessionsChange = useCallback((sessions: SessionInfo[]) => {
@@ -208,7 +209,10 @@ export function AppShell() {
   );
   const hasSubagentSessions = Boolean(activeSessionFamily?.subagents.length);
   // Conversations that finished while the user was elsewhere, until opened.
-  const [completedAt, setCompletedAt] = useState<Record<string, number>>({});
+  // Restored from storage so a reload keeps showing "done" inside the window.
+  const [completedAt, setCompletedAt] = useState<Record<string, number>>(loadCompletionTimes);
+  // Bumped after every expiry check so the timer re-arms for the next marker.
+  const [completionTick, setCompletionTick] = useState(0);
   const [runningSessionIds, setRunningSessionIds] = useState<Set<string>>(() => new Set());
   const runningSessionIdsRef = useRef(runningSessionIds);
   const handleRunningSessionIdsChange = useCallback((ids: Set<string>) => {
@@ -382,6 +386,8 @@ export function AppShell() {
   const [openTabIds, setOpenTabIds] = useState<string[]>(() => loadOpenSessionTabs());
   const openTabIdsRef = useRef(openTabIds);
   openTabIdsRef.current = openTabIds;
+  // Session created by the fresh composer, whose pane reuses the composer's key.
+  const [promotedPaneId, setPromotedPaneId] = useState<string | null>(null);
   // Remount counter per session, used when Settings asks the chat to reload.
   const [tabReloads, setTabReloads] = useState<Record<string, number>>({});
   const sessionsByIdRef = useRef(new Map<string, SessionInfo>());
@@ -498,6 +504,21 @@ export function AppShell() {
     saveOpenSessionTabs(openTabIds);
   }, [openTabIds]);
 
+  // The composer key is only borrowed while the promoted conversation is the one
+  // on screen; after switching away its pane uses its own key again (a remount
+  // that restores the reading position), which keeps keys unique.
+  useEffect(() => {
+    if (!promotedPaneId) return;
+    if (selectedSession?.id === promotedPaneId) return;
+    setPromotedPaneId(null);
+  }, [promotedPaneId, selectedSession?.id]);
+
+  // Persist completion markers too: a reload must not turn a conversation that
+  // finished minutes ago back into idle.
+  useEffect(() => {
+    saveCompletionTimes(completedAt);
+  }, [completedAt]);
+
   // Forget tabs and completion markers for conversations that no longer exist.
   // The visible session is kept even before the catalogue lists it (a session
   // just created inside the composer is transient for one refresh).
@@ -514,23 +535,18 @@ export function AppShell() {
 
   // Expire "done" markers on their own: the completion window is time based, so
   // a conversation that finished 30 minutes ago stops being news even when
-  // nothing else re-renders the tab bar. The timer is re-armed after every
-  // prune and stays bounded so an idle tab wakes at most once a minute.
+  // nothing else re-renders the tab bar. The timer is re-armed for the next
+  // marker after every check (completionTick), which also covers a check that
+  // found nothing to drop yet.
   useEffect(() => {
-    const times = Object.values(completedAt);
-    if (times.length === 0) return;
-    const earliest = Math.min(...times) + DONE_STATUS_WINDOW_MS;
+    const wait = nextCompletionExpiry(completedAt);
+    if (wait === null) return;
     const timer = setTimeout(() => {
-      const now = Date.now();
-      setCompletedAt((completed) => {
-        const kept = Object.fromEntries(
-          Object.entries(completed).filter(([, at]) => at + DONE_STATUS_WINDOW_MS > now),
-        );
-        return Object.keys(kept).length === Object.keys(completed).length ? completed : kept;
-      });
-    }, Math.max(1000, Math.min(earliest - Date.now() + 1000, 60_000)));
+      setCompletedAt((completed) => expireCompletionTimes(completed));
+      setCompletionTick((tick) => tick + 1);
+    }, Math.max(1000, wait + 250));
     return () => clearTimeout(timer);
-  }, [completedAt]);
+  }, [completedAt, completionTick]);
 
   // Pull the newly visible pane's last report into the top-bar panels, and
   // clear them when the composer is shown instead of a conversation.
@@ -999,6 +1015,8 @@ export function AppShell() {
       : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     setNewSessionDraftId(draftId);
     activeNewSessionDraftKeyRef.current = cwd ? `new:${draftId}:${cwd}` : null;
+    // A fresh composer always owns the "composer" pane key again.
+    setPromotedPaneId(null);
     setSelectedSession(null);
     setNewSessionCwd(cwd);
     setSessionKey((k) => k + 1);
@@ -1097,6 +1115,9 @@ export function AppShell() {
   useGlobalKeyboardShortcuts({
     onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
     activeCwd,
+    // Escape belongs to the conversation on screen; a mounted background pane
+    // registers under its own id and must not answer for the composer either.
+    abortOwner: selectedSession?.id ?? "composer",
   });
 
   // Client-built transient SessionInfo (new session / fork) lacks the
@@ -1143,6 +1164,7 @@ export function AppShell() {
     invalidateWorkspaceRestore();
     activeNewSessionDraftKeyRef.current = null;
     setNewSessionCwd(null);
+    setPromotedPaneId(session.id);
     setSelectedSession(session);
     openSessionTab(session.id);
     hydrateSelectedSession(session.id);
@@ -1411,9 +1433,38 @@ export function AppShell() {
     status: deriveSessionActivityStatus(session.id, runningSessionIds, completedAt),
   }));
 
+  // The composer becomes a pane when its first message creates the session.
+  // That pane keeps the composer's React key until it is reloaded, so the
+  // ChatWindow instance (stream, scroll position, draft) survives the promotion
+  // instead of remounting mid-turn. Cleared as soon as another tab is shown.
+  const paneKeyFor = useCallback((session: SessionInfo): string => {
+    if (session.id === promotedPaneId && !tabReloads[session.id]) return "composer";
+    return `${session.id}:${tabReloads[session.id] ?? 0}`;
+  }, [promotedPaneId, tabReloads]);
+
   // Conversations that finished inside the completion window, shared with the
-  // sidebar so both surfaces show the same "done" marker.
-  const doneSessionIds = useMemo(() => new Set(Object.keys(completedAt)), [completedAt]);
+  // sidebar so both surfaces show the same "done" marker. Timestamps are
+  // checked here as well, so an unexpired marker can never disagree with the
+  // tab bar's own derivation.
+  // Evaluated per render: the expiry timer (completionTick) and every new
+  // completion re-render the shell, so the window never lags behind.
+  void completionTick;
+  const completionNow = Date.now();
+  const doneSessionIds = new Set(
+    Object.entries(completedAt)
+      .filter(([, at]) => completionNow - at < DONE_STATUS_WINDOW_MS)
+      .map(([id]) => id),
+  );
+
+  // Completion sounds for conversations whose chat is not mounted at all: a
+  // mounted pane rings through its own SSE stream, and the sidebar reports the
+  // same completion, so playing both would double the tone.
+  const handleBackgroundTaskDone = useCallback((sessionIds: readonly string[]) => {
+    if (!soundEnabledRef.current) return;
+    const mounted = openTabIdsRef.current;
+    if (sessionIds.length > 0 && sessionIds.every((id) => mounted.includes(id))) return;
+    playDoneSound();
+  }, [playDoneSound, soundEnabledRef]);
 
   const handleSelectSessionTab = useCallback((sessionId: string) => {
     const session = sessionsByIdRef.current.get(sessionId);
@@ -2742,9 +2793,12 @@ export function AppShell() {
                 const paneHandlers = paneReportHandlersFor(session.id);
                 return (
                   <div
-                    key={session.id}
+                    key={paneKeyFor(session)}
                     data-session-pane={session.id}
                     data-session-pane-active={active ? "true" : "false"}
+                    id={`session-pane-${session.id}`}
+                    role="tabpanel"
+                    aria-labelledby={`session-tab-${session.id}`}
                     inert={!active}
                     aria-hidden={!active}
                     style={{
@@ -2756,7 +2810,8 @@ export function AppShell() {
                     }}
                   >
                     <ChatWindow
-                      key={`${session.id}:${tabReloads[session.id] ?? 0}`}
+                      key={paneKeyFor(session)}
+                      paneVisible={active}
                       session={session}
                       searchTarget={searchTarget?.sessionId === session.id ? searchTarget : null}
                       onSearchTargetHandled={handleSearchTargetHandled}

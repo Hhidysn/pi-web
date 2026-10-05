@@ -159,8 +159,10 @@ interface Props {
   onAtMention?: (relativePath: string, isDir: boolean) => void;
   onAtMentions?: (relativePaths: string[]) => void;
   /** Fired when a session that is not currently selected finishes running.
-   *  Lets the app play a cross-workspace completion tone. */
-  onBackgroundTaskDone?: () => void;
+   *  Lets the app play a cross-workspace completion tone. Carries the ids that
+   *  finished, so the shell can skip the tone for conversations whose chat is
+   *  mounted and rings through its own stream. */
+  onBackgroundTaskDone?: (sessionIds: readonly string[]) => void;
   onRunningSessionIdsChange?: (ids: Set<string>) => void;
   onSessionsChange?: (sessions: SessionInfo[]) => void;
   /** Conversations that finished within the completion window, so the sidebar
@@ -786,7 +788,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       loadSessions(false, true);
     }
     if (completedWithNotifications.length > 0) {
-      onBackgroundTaskDone?.();
+      onBackgroundTaskDone?.(completedWithNotifications);
     }
 
     previousRunningSessionIdsRef.current = runningSessionIds;
