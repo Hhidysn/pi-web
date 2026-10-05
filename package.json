@@ -94,5 +94,12 @@
     "remark-math": "^6.0.0",
     "tailwindcss": "^4.2.2",
     "typescript": "^5"
+  },
+  "allowScripts": {
+    "node-pty@1.2.0-beta.15": true,
+    "esbuild@0.28.2": true,
+    "protobufjs@7.6.6": true,
+    "unrs-resolver@1.11.1": true,
+    "@google/genai@2.21.0": true
   }
 }
