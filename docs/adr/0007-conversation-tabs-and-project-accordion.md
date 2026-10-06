@@ -60,6 +60,13 @@ remote stay, so the diff stays confined to the UI layer.
   conversation rows. Open groups persist in `pi-web:expanded-project-keys`; the
   group of the open conversation is always revealed. Rows are windowed from
   measured offsets because group headers are shorter than conversation rows.
+- **Removing a project from the list** (same module). A group's crossed-out eye
+  hides that project: the groups are filtered before the accordion is built, and
+  the removal is stored in `pi-web:hidden-project-keys`. Nothing is deleted and
+  no request is sent — the conversations keep their files, their tabs and their
+  status — and a footer that appears only while something is removed lists the
+  hidden projects and puts any of them back. A hidden project stays hidden even
+  while one of its conversations is open; its tab carries the status instead.
 
 Dropped from the intended scope before implementation: a
 "waiting for confirmation" status. The user needed only the three states above,
