@@ -13,25 +13,41 @@ npm run build && npm start   # 生产模式，同一个端口
 官方版（`npx @agegr/pi-web`）默认也用 30141，两者不能同时监听同一个端口：先关掉一个，或者用
 `npx next dev -H 127.0.0.1 -p 30142` 起本分支、把 30141 留给官方版做回退。
 
+日常使用请用下面的桌面快捷方式/启动器；`npm run dev` 适合在终端里调试。
+
 ## 桌面快捷方式 / 启动器（Windows）
 
 桌面和开始菜单里的 **Pi Web** 快捷方式 → `%LOCALAPPDATA%\pi-web\pi-web-start.vbs`（后台无窗口）→
-`start-pi-web.cmd`。这个启动器**已经指向本仓库**，参数可以随时切换：
+`start-pi-web.cmd`。这个启动器**已经指向本仓库**（默认 dev 模式、端口 30141），参数可以随时切换：
 
 | 参数 | 作用 |
 | --- | --- |
 | *（无参数）* | 启动本仓库，**dev 模式**（热重载，无需构建），端口 30141 |
-| `30142` | 换端口：任何非关键字参数都当作端口号 |
+| `30142` | 换端口：任何非关键字参数都当作端口号（1–65535） |
 | `prod` | 用本仓库的**生产构建**启动（更快更稳，需要先构建） |
-| `rebuild` | 先构建（`NODE_OPTIONS=--max-old-space-size=8192 npm run build`），再按 `prod` 启动 |
+| `rebuild` | 先构建（自动带 `NODE_OPTIONS=--max-old-space-size=8192`，8 GB 是 V8 老生代上限、不是总内存），再按 `prod` 启动 |
 | `official` | 回到 npm 安装的官方包 `@agegr/pi-web` |
-| `quiet` | 无窗口（快捷方式用它），输出写入 `%LOCALAPPDATA%\pi-web\pi-web.log` |
+| `quiet` | 不打印自己的输出，日志写入 `pi-web-<端口>.log`（隐藏窗口是快捷方式的 VBS 负责的，不是这个参数） |
+| `dry` | 只打印解析后的 target/mode/port/日志路径，不启动任何东西 |
 | `help` | 打印用法 |
 
-- 端口已被占用时：只打开浏览器、不再起第二个实例，并打印占用者的命令行（便于区分是 fork 还是官方包）。
-- 停止：`stop-pi-web.cmd [端口]`（默认 30141；只杀看起来像 pi-web 的 node 进程，可用 `force` 覆盖）。
-- dev 模式对同一个仓库目录只能有一个实例（Next 的 `.next/dev/lock`）；prod 模式没有这个限制，可以和官方版同时跑在不同端口。
-- 想改默认值：编辑 `start-pi-web.cmd` 顶部的 `set "FORK=..."`、`set "MODE=dev"`。原文件备份为同目录的 `start-pi-web.cmd.orig-backup`。
+- 端口已被占用时：只打开浏览器、不再起第二个实例，并说明占用者是谁（本分支 / 官方包 / 别的程序）以及你请求的是哪个 target，然后以退出码 100 结束（快捷方式据此认为「已在运行」）。
+- **每个端口一个日志**：`pi-web-<端口>.log`，两个实例不会互相截断或占用日志；参数错误在端口确定前写入 `pi-web-launcher.log`。
+- 停止：`stop-pi-web.cmd [端口] [force]`（默认 30141）。它只接受看起来是 pi-web 的进程（本仓库 / `@agegr/pi-web` / Next 的 dev·prod 入口），其它一律拒绝并提示加 `force`；`taskkill /F` 是强制结束，不会优雅关闭正在跑的 agent。
+- dev 模式对同一个仓库目录只能有一个实例（Next 的 `.next/dev/lock`，启动器会提示）；prod 模式没有这个限制，可以和官方版同时跑在不同端口。`rebuild` 在 dev 实例运行时会被拒绝（构建会同时弄坏两边）。
+- 改默认值：编辑 `start-pi-web.cmd` 顶部的 `set "FORK=..."`、`set "MODE=dev"`，或用环境变量 `PI_WEB_FORK` 覆盖仓库路径。原文件备份为同目录的 `start-pi-web.cmd.orig-backup`。
+- 这些文件的版本化副本在仓库的 `scripts/windows/pi-web/`（含说明），换机器时复制到 `%LOCALAPPDATA%\pi-web` 即可。
+
+### 两个实例同时跑（共用 `~/.pi`）
+
+读历史是安全的，**两个写入者同时写同一个会话文件不安全**：不要在两个实例里对同一个「正在运行」的会话发消息、重命名、删除或做分支；「运行中/完成」是各服务端自己的状态，不代表归属。想完全隔离第二个实例，用 `PI_CODING_AGENT_DIR` 指向另一个 agent 目录。
+
+## 上游状态（2026-10-06 查）
+
+- `upstream/main` = `6fcd7d4`（= 本分支的基线 = npm 最新版 `0.10.0`），**领先 0 个提交**；npm 最新版本也是 `0.10.0`。
+- 复查命令：`git fetch upstream && git log --oneline 6fcd7d4..upstream/main`。
+- 未来合并的冲突面主要是我们改得最多的两个文件：`components/AppShell.tsx`（+552/−74）、`components/SessionSidebar.tsx`（+318/−40）；新文件（`SessionTabBar.tsx`、`lib/session-tabs.ts`、`lib/session-status.ts`、`lib/project-accordion.ts`）不与上游同文件冲突。
+- 上游相关的公开提案：#910（open，「Active 侧栏视图」，跨项目活动+置顶）与 #982（PR，已关闭未合并）；已合并的 #887 是「每个浏览器标签页记住一个会话」，都不是应用内 keep-alive 标签页，所以本分支没有被上游取代。
 
 ## 新功能怎么用
 
