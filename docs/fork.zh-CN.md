@@ -13,6 +13,26 @@ npm run build && npm start   # 生产模式，同一个端口
 官方版（`npx @agegr/pi-web`）默认也用 30141，两者不能同时监听同一个端口：先关掉一个，或者用
 `npx next dev -H 127.0.0.1 -p 30142` 起本分支、把 30141 留给官方版做回退。
 
+## 桌面快捷方式 / 启动器（Windows）
+
+桌面和开始菜单里的 **Pi Web** 快捷方式 → `%LOCALAPPDATA%\pi-web\pi-web-start.vbs`（后台无窗口）→
+`start-pi-web.cmd`。这个启动器**已经指向本仓库**，参数可以随时切换：
+
+| 参数 | 作用 |
+| --- | --- |
+| *（无参数）* | 启动本仓库，**dev 模式**（热重载，无需构建），端口 30141 |
+| `30142` | 换端口：任何非关键字参数都当作端口号 |
+| `prod` | 用本仓库的**生产构建**启动（更快更稳，需要先构建） |
+| `rebuild` | 先构建（`NODE_OPTIONS=--max-old-space-size=8192 npm run build`），再按 `prod` 启动 |
+| `official` | 回到 npm 安装的官方包 `@agegr/pi-web` |
+| `quiet` | 无窗口（快捷方式用它），输出写入 `%LOCALAPPDATA%\pi-web\pi-web.log` |
+| `help` | 打印用法 |
+
+- 端口已被占用时：只打开浏览器、不再起第二个实例，并打印占用者的命令行（便于区分是 fork 还是官方包）。
+- 停止：`stop-pi-web.cmd [端口]`（默认 30141；只杀看起来像 pi-web 的 node 进程，可用 `force` 覆盖）。
+- dev 模式对同一个仓库目录只能有一个实例（Next 的 `.next/dev/lock`）；prod 模式没有这个限制，可以和官方版同时跑在不同端口。
+- 想改默认值：编辑 `start-pi-web.cmd` 顶部的 `set "FORK=..."`、`set "MODE=dev"`。原文件备份为同目录的 `start-pi-web.cmd.orig-backup`。
+
 ## 新功能怎么用
 
 ### 1. 对话标签页（一个窗口里开多个会话）
