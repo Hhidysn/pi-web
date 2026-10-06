@@ -48,6 +48,7 @@ npm run build && npm start   # 生产模式，同一个端口
 - 复查命令：`git fetch upstream && git log --oneline 6fcd7d4..upstream/main`。
 - 未来合并的冲突面主要是我们改得最多的两个文件：`components/AppShell.tsx`（+552/−74）、`components/SessionSidebar.tsx`（+318/−40）；新文件（`SessionTabBar.tsx`、`lib/session-tabs.ts`、`lib/session-status.ts`、`lib/project-accordion.ts`）不与上游同文件冲突。
 - 上游相关的公开提案：#910（open，「Active 侧栏视图」，跨项目活动+置顶）与 #982（PR，已关闭未合并）；已合并的 #887 是「每个浏览器标签页记住一个会话」，都不是应用内 keep-alive 标签页，所以本分支没有被上游取代。
+- **推送**：`origin` = `https://github.com/Hhidysn/pi-web-gui`（**私有**，个人备份/版本）。`main` 始终等于上游基线（目前 `6fcd7d4`），本分支的改动都在 `feat/multi-project-tabs` 上；日常 `git push origin feat/multi-project-tabs`。`upstream` 仍指 `agegr/pi-web`，将来合并用 `git fetch upstream`。改可见性/删除：`gh repo edit Hhidysn/pi-web-gui --visibility public` / `gh repo delete Hhidysn/pi-web-gui`。
 
 ## 新功能怎么用
 
