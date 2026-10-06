@@ -15,6 +15,10 @@ npm run build && npm start   # 生产模式，同一个端口
 
 日常使用请用下面的桌面快捷方式/启动器；`npm run dev` 适合在终端里调试。
 
+通过 Tailscale Serve 等 HTTPS 入口访问开发模式时，把入口域名（不带协议和端口）加入用户环境变量
+`PI_WEB_ALLOWED_HOSTS`，并在环境变量生效后重启 pi-web。这个白名单同时用于应用请求校验和
+Next.js 开发资源校验；只配置前者会导致开发字体或热更新连接被拒绝。
+
 ## 桌面快捷方式 / 启动器（Windows）
 
 桌面和开始菜单里的 **Pi Web** 快捷方式 → `%LOCALAPPDATA%\pi-web\pi-web-start.vbs`（后台无窗口）→
