@@ -21,6 +21,8 @@ export const PROJECT_GROUP_ROW_HEIGHT = 34;
 export const SESSION_ROW_HEIGHT = 54;
 
 export const EXPANDED_PROJECTS_STORAGE_KEY = "pi-web:expanded-project-keys";
+/** Projects removed from the sidebar list; their conversations are kept. */
+export const HIDDEN_PROJECTS_STORAGE_KEY = "pi-web:hidden-project-keys";
 
 const DEFAULT_OVERSCAN = 6;
 
@@ -122,7 +124,7 @@ export function accordionVisibleIndices<T>(
 }
 
 /** Raw stored value is a JSON array of project keys; anything else is ignored. */
-export function parseExpandedProjectKeys(raw: string | null): string[] {
+export function parseProjectKeys(raw: string | null): string[] {
   if (typeof raw !== "string" || raw.length === 0) return [];
   let parsed: unknown;
   try {
@@ -156,30 +158,53 @@ function getBrowserStorage(): StorageLike | null {
   }
 }
 
-export function loadExpandedProjectKeys(): string[] {
+function readKeys(storageKey: string): string[] {
   const storage = getBrowserStorage();
   if (!storage) return [];
   try {
-    return parseExpandedProjectKeys(storage.getItem(EXPANDED_PROJECTS_STORAGE_KEY));
+    return parseProjectKeys(storage.getItem(storageKey));
   } catch {
     return [];
   }
 }
 
-export function saveExpandedProjectKeys(keys: readonly string[]): void {
+function writeKeys(storageKey: string, keys: readonly string[]): void {
   const storage = getBrowserStorage();
   if (!storage) return;
   try {
-    storage.setItem(EXPANDED_PROJECTS_STORAGE_KEY, JSON.stringify([...new Set(keys)]));
+    storage.setItem(storageKey, JSON.stringify([...new Set(keys)]));
   } catch {
-    // Quota or a private-mode store: the accordion still works, it just forgets.
+    // Quota or a private-mode store: the list still works, it just forgets.
   }
+}
+
+export function loadExpandedProjectKeys(): string[] {
+  return readKeys(EXPANDED_PROJECTS_STORAGE_KEY);
+}
+
+export function saveExpandedProjectKeys(keys: readonly string[]): void {
+  writeKeys(EXPANDED_PROJECTS_STORAGE_KEY, keys);
+}
+
+/** Projects the sidebar does not list (their conversations stay in `~/.pi`). */
+export function loadHiddenProjectKeys(): string[] {
+  return readKeys(HIDDEN_PROJECTS_STORAGE_KEY);
+}
+
+export function saveHiddenProjectKeys(keys: readonly string[]): void {
+  writeKeys(HIDDEN_PROJECTS_STORAGE_KEY, keys);
 }
 
 /** Add or remove one key, keeping the list order stable. */
 export function toggleExpandedProjectKey(keys: readonly string[], key: string, expanded: boolean): string[] {
   const without = keys.filter((value) => value !== key);
   return expanded ? [...without, key] : without;
+}
+
+/** Add or remove one hidden key, keeping the list order stable. */
+export function toggleHiddenProjectKey(keys: readonly string[], key: string, hidden: boolean): string[] {
+  const without = keys.filter((value) => value !== key);
+  return hidden ? [...without, key] : without;
 }
 
 export interface ProjectGroup<T> {
@@ -215,4 +240,24 @@ export function listProjectGroups<T>(
     });
   }
   return groups;
+}
+
+/** The groups the sidebar lists: everything except the projects removed from it. */
+export function visibleProjectGroups<T>(
+  groups: readonly ProjectGroup<T>[],
+  hiddenKeys: readonly string[],
+): ProjectGroup<T>[] {
+  if (hiddenKeys.length === 0) return [...groups];
+  const hidden = new Set(hiddenKeys);
+  return groups.filter((group) => !hidden.has(group.key));
+}
+
+/** The removed groups, for the sidebar's "hidden projects" footer. */
+export function hiddenProjectGroups<T>(
+  groups: readonly ProjectGroup<T>[],
+  hiddenKeys: readonly string[],
+): ProjectGroup<T>[] {
+  if (hiddenKeys.length === 0) return [];
+  const hidden = new Set(hiddenKeys);
+  return groups.filter((group) => hidden.has(group.key));
 }

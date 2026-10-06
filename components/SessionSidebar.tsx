@@ -12,10 +12,15 @@ import {
   accordionRowIndex,
   accordionVisibleIndices,
   buildAccordion,
+  hiddenProjectGroups,
   listProjectGroups,
   loadExpandedProjectKeys,
+  loadHiddenProjectKeys,
   saveExpandedProjectKeys,
+  saveHiddenProjectKeys,
   toggleExpandedProjectKey,
+  toggleHiddenProjectKey,
+  visibleProjectGroups,
 } from "@/lib/project-accordion";
 import { workspaceKeyOf } from "@/lib/workspace-memory";
 import { formatRelativeTime } from "@/lib/i18n/format";
@@ -466,6 +471,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // Projects whose conversation list is open in the accordion. Kept across
   // reloads so a project the user works in stays open without being revisited.
   const [expandedProjectKeys, setExpandedProjectKeys] = useState<string[]>(loadExpandedProjectKeys);
+  // Projects removed from the list (their conversations stay in ~/.pi), and
+  // whether the footer listing them is open.
+  const [hiddenProjectKeys, setHiddenProjectKeys] = useState<string[]>(loadHiddenProjectKeys);
+  const [hiddenProjectsOpen, setHiddenProjectsOpen] = useState(false);
   const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => loadUnreadSessionIds());
   const previousRunningSessionIdsRef = useRef<Set<string>>(new Set());
   const currentSuppressedCompletionSessionIdsRef = useRef<Set<string>>(new Set());
@@ -1157,6 +1166,10 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     saveExpandedProjectKeys(expandedProjectKeys);
   }, [expandedProjectKeys]);
 
+  useEffect(() => {
+    saveHiddenProjectKeys(hiddenProjectKeys);
+  }, [hiddenProjectKeys]);
+
   const familiesByProjectKey = useMemo(() => {
     const groups = new Map<string, ReturnType<typeof listSessionFamilies>>();
     for (const family of listSessionFamilies(allSessions)) {
@@ -1183,16 +1196,26 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     [allSessions, familiesByProjectKey, selectedProject],
   );
 
+  const listedGroups = useMemo(
+    () => visibleProjectGroups(projectGroups, hiddenProjectKeys),
+    [projectGroups, hiddenProjectKeys],
+  );
+
+  const removedGroups = useMemo(
+    () => hiddenProjectGroups(projectGroups, hiddenProjectKeys),
+    [projectGroups, hiddenProjectKeys],
+  );
+
   const accordion = useMemo(
     () => buildAccordion(
-      projectGroups.map((group) => ({
+      listedGroups.map((group) => ({
         key: group.key,
         expanded: expandedProjectKeys.includes(group.key),
         items: group.items,
       })),
       (family) => family.root.id,
     ),
-    [expandedProjectKeys, projectGroups],
+    [expandedProjectKeys, listedGroups],
   );
 
   const accordionIndices = useMemo(
@@ -1207,6 +1230,17 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   const toggleProjectGroup = useCallback((key: string, expanded: boolean) => {
     setExpandedProjectKeys((keys) => toggleExpandedProjectKey(keys, key, expanded));
+  }, []);
+
+  // Removing a project only takes it out of the list: its conversations stay
+  // where they are, and the footer below the list brings it back.
+  const hideProject = useCallback((key: string) => {
+    setHiddenProjectKeys((keys) => toggleHiddenProjectKey(keys, key, true));
+    setExpandedProjectKeys((keys) => toggleExpandedProjectKey(keys, key, false));
+  }, []);
+
+  const restoreProject = useCallback((key: string) => {
+    setHiddenProjectKeys((keys) => toggleHiddenProjectKey(keys, key, false));
   }, []);
 
   // Reveal the group of the open conversation, and the group the workspace was
@@ -1949,7 +1983,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             {error}
           </div>
         )}
-        {!loading && !error && accordion.rows.length === 0 && (
+        {!loading && !error && accordion.rows.length === 0 && removedGroups.length === 0 && (
           <div style={{ padding: "16px 14px", color: "var(--text-muted)", fontSize: 12 }}>
             {t("sidebar.noSessions")}
           </div>
@@ -1980,6 +2014,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                       activity={projectActivity.get(row.sectionKey)}
                       onToggle={(expanded) => toggleProjectGroup(row.sectionKey, expanded)}
                       onNewSession={() => handleNewSessionInProject(group?.root ?? row.sectionKey, row.sectionKey)}
+                      onHide={() => hideProject(row.sectionKey)}
                     />
                   </div>
                 );
@@ -2016,6 +2051,87 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
           </div>
         )}
         </div>
+        {removedGroups.length > 0 && (
+          <div
+            data-hidden-projects={removedGroups.length}
+            style={{ flexShrink: 0, borderTop: "1px solid var(--border)", background: "var(--bg-panel)" }}
+          >
+            <button
+              onClick={() => setHiddenProjectsOpen((open) => !open)}
+              aria-expanded={hiddenProjectsOpen}
+              title={t("sidebar.hiddenProjectsTitle")}
+              data-testid="hidden-projects-toggle"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                width: "100%",
+                height: 30,
+                padding: "0 10px 0 14px",
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                textAlign: "left",
+                fontSize: 11,
+              }}
+            >
+              <svg
+                width="9"
+                height="9"
+                viewBox="0 0 10 10"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+                style={{ flexShrink: 0, transform: hiddenProjectsOpen ? "none" : "rotate(-90deg)", transition: "transform 0.15s" }}
+              >
+                <polyline points="2 3.5 5 6.5 8 3.5" />
+              </svg>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {t("sidebar.hiddenProjects", { count: removedGroups.length })}
+              </span>
+            </button>
+            {hiddenProjectsOpen && (
+              <div className="scrollbar-subtle" style={{ maxHeight: "min(40vh, 240px)", overflowY: "auto" }}>
+                {removedGroups.map((group) => (
+                  <div
+                    key={group.key}
+                    data-hidden-project={group.root}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      height: PROJECT_GROUP_ROW_HEIGHT,
+                      paddingLeft: 14,
+                      paddingRight: 8,
+                    }}
+                  >
+                    <PathLabel text={group.root} style={{ flex: 1, fontFamily: "var(--font-mono)", color: "var(--text-dim)" }} />
+                    <span
+                      title={t("sidebar.conversationsCount", { count: group.items.length })}
+                      style={{ flexShrink: 0, color: "var(--text-dim)", fontSize: 10, fontFamily: "var(--font-mono)" }}
+                    >
+                      {group.items.length}
+                    </span>
+                    <ProjectHeaderIconButton
+                      title={`${t("sidebar.restoreProject")}: ${group.root}`}
+                      testId="restore-project"
+                      onClick={() => restoreProject(group.key)}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M2 12s3.5-8 10-8 10 8 10 8-3.5 8-10 8-10-8-10-8z" />
+                        <circle cx="12" cy="12" r="3" />
+                      </svg>
+                    </ProjectHeaderIconButton>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         </SessionSearch>
       </div>
 
@@ -2355,10 +2471,11 @@ function showProjectActivity(
 /**
  * One project's header row in the sidebar accordion. The chevron and the row
  * itself open/close the project's conversations; the "+" starts a new
- * conversation in that project (and moves the workspace there). The current
- * workspace and the project holding the open conversation are highlighted, and
- * activity is shown per project so a running or just-finished conversation in
- * another project is visible without expanding it.
+ * conversation in that project (and moves the workspace there); the crossed-out
+ * eye removes the project from the list (its conversations are kept). The
+ * current workspace and the project holding the open conversation are
+ * highlighted, and activity is shown per project so a running or just-finished
+ * conversation in another project is visible without expanding it.
  */
 function ProjectGroupHeader({
   root,
@@ -2369,6 +2486,7 @@ function ProjectGroupHeader({
   activity,
   onToggle,
   onNewSession,
+  onHide,
 }: {
   root: string;
   count: number;
@@ -2378,6 +2496,7 @@ function ProjectGroupHeader({
   activity: { running: number; done?: number; unread: number } | undefined;
   onToggle: (expanded: boolean) => void;
   onNewSession: () => void;
+  onHide: () => void;
 }) {
   const { t } = useI18n();
   const [hovered, setHovered] = useState(false);
@@ -2400,6 +2519,8 @@ function ProjectGroupHeader({
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      onFocusCapture={() => setHovered(true)}
+      onBlurCapture={() => setHovered(false)}
     >
       <button
         onClick={() => onToggle(!expanded)}
@@ -2446,35 +2567,73 @@ function ProjectGroupHeader({
         </span>
         {showProjectActivity(activity, t)}
       </button>
-      <button
-        onClick={onNewSession}
+      <ProjectHeaderIconButton
         title={`${t("sidebar.newSessionInProject")}: ${root}`}
-        aria-label={`${t("sidebar.newSessionInProject")}: ${root}`}
-        onFocus={() => setHovered(true)}
-        onBlur={() => setHovered(false)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          width: 20,
-          height: 20,
-          padding: 0,
-          flexShrink: 0,
-          background: "none",
-          border: "none",
-          borderRadius: 5,
-          color: "var(--text-muted)",
-          cursor: "pointer",
-          opacity: hovered || isCurrent ? 1 : 0,
-          transition: "opacity 0.1s",
-        }}
+        testId="new-session-in-project"
+        visible={hovered || isCurrent}
+        onClick={onNewSession}
       >
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <line x1="12" y1="5" x2="12" y2="19" />
           <line x1="5" y1="12" x2="19" y2="12" />
         </svg>
-      </button>
+      </ProjectHeaderIconButton>
+      <ProjectHeaderIconButton
+        title={`${t("sidebar.hideProjectTitle")}: ${root}`}
+        testId="hide-project"
+        visible={hovered}
+        onClick={onHide}
+      >
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M17.9 17.9A10.5 10.5 0 0 1 12 20c-6.5 0-10-8-10-8a18.4 18.4 0 0 1 5.1-5.9" />
+          <path d="M9.9 4.2A9.9 9.9 0 0 1 12 4c6.5 0 10 8 10 8a18.6 18.6 0 0 1-2.2 3.2" />
+          <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+          <line x1="3" y1="3" x2="21" y2="21" />
+        </svg>
+      </ProjectHeaderIconButton>
     </div>
+  );
+}
+
+/** The small square icon buttons of a project header (and of the hidden list). */
+function ProjectHeaderIconButton({
+  title,
+  testId,
+  visible = true,
+  onClick,
+  children,
+}: {
+  title: string;
+  testId?: string;
+  visible?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      data-testid={testId}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 20,
+        height: 20,
+        padding: 0,
+        flexShrink: 0,
+        background: "none",
+        border: "none",
+        borderRadius: 5,
+        color: "var(--text-muted)",
+        cursor: "pointer",
+        opacity: visible ? 1 : 0,
+        transition: "opacity 0.1s",
+      }}
+    >
+      {children}
+    </button>
   );
 }
 

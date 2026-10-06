@@ -150,3 +150,36 @@ test("hides subagent rows and aggregates their state into the main session row",
   assert.match(source, /familySessions\.some\(\(session\) => doneSessionIds\?\.has\(session\.id\)\)/);
   assert.doesNotMatch(source, /function SessionTreeItem/);
 });
+
+test("a project can be removed from the list without touching its conversations", () => {
+  // Removed projects are remembered like the open ones, in their own key.
+  assert.match(source, /useState<string\[\]>\(loadHiddenProjectKeys\)/);
+  assert.match(source, /saveHiddenProjectKeys\(hiddenProjectKeys\)/);
+  assert.match(source, /setHiddenProjectKeys\(\(keys\) => toggleHiddenProjectKey\(keys, key, true\)\)/);
+  assert.match(source, /setHiddenProjectKeys\(\(keys\) => toggleHiddenProjectKey\(keys, key, false\)\)/);
+  // The accordion lists the visible groups only, so the removed ones leave the
+  // list; hiding also closes the group it just removed.
+  assert.match(source, /visibleProjectGroups\(projectGroups, hiddenProjectKeys\)/);
+  assert.match(source, /hiddenProjectGroups\(projectGroups, hiddenProjectKeys\)/);
+  assert.match(source, /listedGroups\.map\(\(group\) => \(\{/);
+  assert.doesNotMatch(source, /projectGroups\.map\(\(group\) => \(\{/);
+  assert.match(source, /setExpandedProjectKeys\(\(keys\) => toggleExpandedProjectKey\(keys, key, false\)\)/);
+  // Nothing is deleted: the header button says so, and the footer restores the
+  // group from the same catalogue.
+  assert.match(source, /testId="hide-project"/);
+  assert.match(source, /title=\{`\$\{t\("sidebar\.hideProjectTitle"\)\}: \$\{root\}`\}/);
+  assert.match(source, /onHide=\{\(\) => hideProject\(row\.sectionKey\)\}/);
+  assert.match(source, /data-hidden-projects=\{removedGroups\.length\}/);
+  assert.match(source, /data-hidden-project=\{group\.root\}/);
+  assert.match(source, /testId="restore-project"/);
+  assert.match(source, /onClick=\{\(\) => restoreProject\(group\.key\)\}/);
+  // Removing a project never reaches the disk: no delete request at all.
+  const hideProjectBody = source.slice(
+    source.indexOf("const hideProject = useCallback"),
+    source.indexOf("const restoreProject = useCallback"),
+  );
+  assert.ok(hideProjectBody.length > 0);
+  assert.doesNotMatch(hideProjectBody, /fetch\(|DELETE|api\/sessions|onSessionDeleted/);
+  // The list is empty only when nothing is hidden either.
+  assert.match(source, /accordion\.rows\.length === 0 && removedGroups\.length === 0/);
+});

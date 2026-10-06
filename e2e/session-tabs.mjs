@@ -284,6 +284,45 @@ try {
   assert.ok(leaseRequests.includes(ALPHA), "the visible conversation keeps its session warm");
   assert.ok(!leaseRequests.includes(BETA), "a hidden conversation releases its session once it is idle");
 
+  // 11. Removing a project takes it out of the sidebar list without touching
+  //     its conversations; the footer lists it and puts it back.
+  const projectListed = async (root) =>
+    (await page.getByRole("button", { name: `Expand project: ${root}`, exact: true }).count()) +
+    (await page.getByRole("button", { name: `Collapse project: ${root}`, exact: true }).count());
+  await setExpanded(projectB, true);
+  assert.equal(await projectListed(projectB), 1, "the project is listed before it is removed");
+  await page.getByRole("button", { name: `Remove from sidebar (conversations are kept): ${projectB}` }).click();
+  await page.getByRole("button", { name: `Collapse project: ${projectB}`, exact: true }).waitFor({ state: "detached", timeout: 10_000 });
+  assert.equal(await page.getByTitle("Tabs beta question", { exact: true }).count(), 0,
+    "the removed project's conversations leave the list");
+  const hiddenFooter = page.locator('[data-hidden-projects="1"]');
+  await hiddenFooter.waitFor();
+  // Its conversations are untouched: the open tab and the session listing stay.
+  assert.equal(await page.locator("[role='tab']").count(), 2, "removing a project does not close its tabs");
+  const stillListed = await (await fetch(`${base}/api/sessions`)).json();
+  assert.ok(stillListed.sessions.some((session) => session.id === BETA),
+    "removing a project must not delete its conversations");
+  // The footer lists it with its conversation count and puts it back.
+  await page.locator('[data-testid="hidden-projects-toggle"]').click();
+  const hiddenRow = page.locator("[data-hidden-project]");
+  await hiddenRow.waitFor();
+  assert.match(await hiddenRow.innerText(), /beta/, "the hidden row names the project");
+  assert.match(await hiddenRow.innerText(), /1/, "the hidden row shows its conversation count");
+  await page.screenshot({ path: join(artifacts, "session-hidden-project.png") });
+  // It stays removed across a reload (and comes back collapsed, as removing
+  // also closed the group).
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator('[data-hidden-projects="1"]').waitFor();
+  assert.equal(await projectListed(projectB), 0,
+    "the removed project stays out of the list after a reload");
+  await page.locator('[data-testid="hidden-projects-toggle"]').click();
+  await page.getByRole("button", { name: `Show again: ${projectB}` }).click();
+  await page.locator("[data-hidden-projects]").waitFor({ state: "detached" });
+  await page.getByRole("button", { name: `Expand project: ${projectB}`, exact: true }).waitFor();
+  await setExpanded(projectB, true);
+  assert.equal(await page.getByTitle("Tabs beta question", { exact: true }).count(), 1,
+    "showing it again lists its conversations");
+
   const recoverableErrors = consoleErrors.filter((text) => !/favicon|manifest/i.test(text));
   assert.deepEqual(recoverableErrors, [], "browser errors while using tabs");
   await page.screenshot({ path: join(artifacts, "session-tabs-after-close.png") });
@@ -291,6 +330,7 @@ try {
   console.log("PASS: the project accordion opens, collapses and starts conversations per project");
   console.log("PASS: running and finished conversations are marked on the tab and in the sidebar");
   console.log("PASS: Escape and session liveness follow the visible conversation, not every mounted pane");
+  console.log("PASS: a project can be removed from the list and shown again without losing its conversations");
 } finally {
   await browser?.close().catch(() => {});
   server?.kill("SIGTERM");
