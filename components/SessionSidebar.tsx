@@ -2472,10 +2472,12 @@ function showProjectActivity(
  * One project's header row in the sidebar accordion. The chevron and the row
  * itself open/close the project's conversations; the "+" starts a new
  * conversation in that project (and moves the workspace there); the crossed-out
- * eye removes the project from the list (its conversations are kept). The
- * current workspace and the project holding the open conversation are
- * highlighted, and activity is shown per project so a running or just-finished
- * conversation in another project is visible without expanding it.
+ * eye removes the project from the list (its conversations are kept) and stays
+ * visible, so it can be found without hovering — on touch screens there is no
+ * hover at all. The current workspace and the project holding the open
+ * conversation are highlighted, and activity is shown per project so a running
+ * or just-finished conversation in another project is visible without expanding
+ * it.
  */
 function ProjectGroupHeader({
   root,
@@ -2581,7 +2583,7 @@ function ProjectGroupHeader({
       <ProjectHeaderIconButton
         title={`${t("sidebar.hideProjectTitle")}: ${root}`}
         testId="hide-project"
-        visible={hovered}
+        color={hovered ? "var(--text)" : "var(--text-dim)"}
         onClick={onHide}
       >
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -2600,12 +2602,14 @@ function ProjectHeaderIconButton({
   title,
   testId,
   visible = true,
+  color = "var(--text-muted)",
   onClick,
   children,
 }: {
   title: string;
   testId?: string;
   visible?: boolean;
+  color?: string;
   onClick: () => void;
   children: ReactNode;
 }) {
@@ -2626,7 +2630,7 @@ function ProjectHeaderIconButton({
         background: "none",
         border: "none",
         borderRadius: 5,
-        color: "var(--text-muted)",
+        color,
         cursor: "pointer",
         opacity: visible ? 1 : 0,
         transition: "opacity 0.1s",

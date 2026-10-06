@@ -61,7 +61,8 @@ remote stay, so the diff stays confined to the UI layer.
   group of the open conversation is always revealed. Rows are windowed from
   measured offsets because group headers are shorter than conversation rows.
 - **Removing a project from the list** (same module). A group's crossed-out eye
-  hides that project: the groups are filtered before the accordion is built, and
+  (always visible, brighter on hover) hides that project: the groups are filtered
+  before the accordion is built, and
   the removal is stored in `pi-web:hidden-project-keys`. Nothing is deleted and
   no request is sent — the conversations keep their files, their tabs and their
   status — and a footer that appears only while something is removed lists the

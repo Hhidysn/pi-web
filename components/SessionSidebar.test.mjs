@@ -167,6 +167,10 @@ test("a project can be removed from the list without touching its conversations"
   // Nothing is deleted: the header button says so, and the footer restores the
   // group from the same catalogue.
   assert.match(source, /testId="hide-project"/);
+  // The remove button is always visible: a hover-only icon is unreachable on a
+  // touch screen and easy to miss with a mouse.
+  assert.match(source, /color=\{hovered \? "var\(--text\)" : "var\(--text-dim\)"\}/);
+  assert.doesNotMatch(source, /testId="hide-project"[\s\S]{0,200}?visible=\{hovered\}/);
   assert.match(source, /title=\{`\$\{t\("sidebar\.hideProjectTitle"\)\}: \$\{root\}`\}/);
   assert.match(source, /onHide=\{\(\) => hideProject\(row\.sectionKey\)\}/);
   assert.match(source, /data-hidden-projects=\{removedGroups\.length\}/);
