@@ -1,13 +1,14 @@
 /**
  * Per-browser sidebar preferences: the active tab (sessions or files), the
  * user's explicit project group expand/collapse choices, whether the pinned
- * section is collapsed, and whether the files tab lists ignored files.
+ * section is collapsed, which projects are hidden, and whether the files tab lists ignored files.
  * Best-effort localStorage, like the other sidebar memories: privacy mode or
  * quota errors fall back to defaults.
  */
 
 const SIDEBAR_TAB_STORAGE_KEY = "pi-web:sidebar-tab";
 const GROUP_EXPANSION_STORAGE_KEY = "pi-web:sidebar-groups";
+const HIDDEN_PROJECTS_STORAGE_KEY = "pi-web:hidden-project-keys";
 const PINNED_COLLAPSED_STORAGE_KEY = "pi-web:sidebar-pins-collapsed";
 const SHOW_IGNORED_FILES_STORAGE_KEY = "pi-web:sidebar-files-show-ignored";
 /** What the sessions/explorer split, which the two tabs replaced, kept: nothing reads them now. */
@@ -98,6 +99,28 @@ export function loadPinnedCollapsed(storage: StorageLike | null = getBrowserStor
     return storage.getItem(PINNED_COLLAPSED_STORAGE_KEY) === "true";
   } catch {
     return false;
+  }
+}
+
+/** A view preference only: hiding never archives or deletes sessions. */
+export function loadHiddenProjectKeys(storage: StorageLike | null = getBrowserStorage()): string[] {
+  if (!storage) return [];
+  try {
+    const value: unknown = JSON.parse(storage.getItem(HIDDEN_PROJECTS_STORAGE_KEY) ?? "[]");
+    return Array.isArray(value)
+      ? [...new Set(value.filter((key): key is string => typeof key === "string" && key.length > 0))]
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveHiddenProjectKeys(keys: readonly string[], storage: StorageLike | null = getBrowserStorage()): void {
+  if (!storage) return;
+  try {
+    storage.setItem(HIDDEN_PROJECTS_STORAGE_KEY, JSON.stringify([...new Set(keys)]));
+  } catch {
+    // Persistence is best-effort.
   }
 }
 

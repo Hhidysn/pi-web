@@ -6,7 +6,7 @@ import { createJiti } from "jiti";
 const jiti = createJiti(import.meta.url, { jsx: { runtime: "automatic" }, tsconfigPaths: true });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { I18nProvider } = await jiti.import("@/hooks/useI18n.tsx");
+const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 const { SessionSidebar, sameIdsOr } = await jiti.import("./SessionSidebar.tsx");
 const { buildSessionTree, getRowOffsets, getVisibleRowIndices } = await jiti.import("@/lib/session-tree.ts");
 
@@ -310,7 +310,7 @@ test("the tab chosen last is shown again after hydration, not in the first rende
   assert.doesNotMatch(source, /useState[^;\n]*\(\(\) => load(?:SidebarTab|GroupExpansion|PinnedCollapsed|ShowIgnoredFiles)\(\)\)/);
   assert.match(
     source,
-    /useEffect\(\(\) => \{\s*const tab = loadSidebarTab\(\);\s*if \(tab !== "sessions"\) setSidebarTab\(tab\);\s*const groups = loadGroupExpansion\(\);\s*if \(Object\.keys\(groups\)\.length > 0\) setGroupExpansion\(groups\);\s*if \(loadPinnedCollapsed\(\)\) setPinnedCollapsed\(true\);\s*if \(loadShowIgnoredFiles\(\)\) setShowIgnoredFiles\(true\);\s*forgetRetiredSidebarKeys\(\);\s*\}, \[\]\);/,
+    /useEffect\(\(\) => \{\s*const tab = loadSidebarTab\(\);\s*if \(tab !== "sessions"\) setSidebarTab\(tab\);\s*const groups = loadGroupExpansion\(\);\s*if \(Object\.keys\(groups\)\.length > 0\) setGroupExpansion\(groups\);\s*setHiddenProjectKeys\(loadHiddenProjectKeys\(\)\);\s*if \(loadPinnedCollapsed\(\)\) setPinnedCollapsed\(true\);\s*if \(loadShowIgnoredFiles\(\)\) setShowIgnoredFiles\(true\);\s*forgetRetiredSidebarKeys\(\);\s*\}, \[\]\);/,
   );
 });
 
@@ -534,7 +534,7 @@ test("the bar hears of the sidebar's cwd only when something it shows changed", 
   assert.match(snapshot, /currentWorktreePath: listed \? currentWorktreePath : null,/);
   assert.match(snapshot, /projects: projectChoiceList,/);
   // With the names the user gave projects, the bar's project too.
-  assert.match(source, /const projectChoiceList = useMemo\(\s*\(\) => mergeProjectChoices\(model\.projects, recentProjects, projectNames\),\s*\[model\.projects, recentProjects, projectNames\],\s*\);/);
+  assert.match(source, /const projectChoiceList = useMemo\(\s*\(\) => mergeProjectChoices\(\[\.\.\.model\.projects, \.\.\.model\.hiddenProjects\], recentProjects, projectNames\),\s*\[model\.projects, model\.hiddenProjects, recentProjects, projectNames\],\s*\);/);
   assert.match(snapshot, /project: withProjectAlias\(selectedProject, projectNames\),/);
   assert.match(snapshot, /const newSessionContextSignature = newSessionContextKey\(newSessionContext\);/);
   assert.match(snapshot, /useEffect\(\(\) => \{\s*onNewSessionContextChange\?\.\(newSessionContextRef\.current\);\s*\}, \[newSessionContextSignature, onNewSessionContextChange\]\);/);
@@ -722,7 +722,7 @@ test("Fork copies the row's session on the server and opens the copy where its r
   // The tree hands a request back once it has scrolled to it or dropped it:
   // kept, a tree mounted again after a search would run it a second time.
   assert.match(source, /const handleRevealHandled = useCallback\(\(id: number\) => \{\s*setTreeReveal\(\(current\) => \(current\?\.id === id \? null : current\)\);\s*\}, \[\]\);/);
-  assert.equal((source.match(/setTreeReveal\(/g) ?? []).length, 3, "only a fork's open, a project move and the tree's answer set it");
+  assert.equal((source.match(/setTreeReveal\(/g) ?? []).length, 4, "a fork's open, a project move, restoring a project and the tree's answer set it");
   // Only the main tree reveals; the archive view is closed by then.
   assert.equal((source.match(/reveal=\{treeReveal\}/g) ?? []).length, 1);
   assert.equal((source.match(/onRevealHandled=\{handleRevealHandled\}/g) ?? []).length, 1);

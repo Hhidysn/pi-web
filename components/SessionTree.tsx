@@ -39,6 +39,7 @@ import type { SidebarMenuAnchor } from "./SidebarMenu";
 import {
   ArchiveIcon,
   ChevronIcon,
+  EyeIcon,
   FolderPlusIcon,
   MoreIcon,
   PinIcon,
@@ -125,6 +126,8 @@ export interface SessionTreeProps {
   /** A group's "+": a new session in that project at once. */
   onGroupNew(project: SidebarProject): void;
   onGroupMenu(project: SidebarProject, opener: HTMLElement): void;
+  onHideProject(project: SidebarProject): void;
+  onOpenHiddenProjects(opener: HTMLElement): void;
   onOpenOtherProject(opener: HTMLElement): void;
   onOpenArchive(): void;
   /** Scroll a row into view (and maybe focus it); see SessionTreeReveal. */
@@ -874,6 +877,18 @@ const GroupRowView = memo(function GroupRowView({
         <button
           type="button"
           className="session-tree-group-action"
+          aria-label={t("sidebar.hideProject", { name: project.name })}
+          title={t("sidebar.hideProject", { name: project.name })}
+          onClick={(event) => {
+            event.stopPropagation();
+            handlers.current.onHideProject(project);
+          }}
+        >
+          <EyeIcon size={13} />
+        </button>
+        <button
+          type="button"
+          className="session-tree-group-action"
           aria-label={t("sidebar.newSessionInProject", { name: project.name })}
           title={t("sidebar.newSessionInProject", { name: project.name })}
           onClick={(event) => {
@@ -1004,6 +1019,16 @@ const PlainRowView = memo(function PlainRowView({
           <button type="button" className="session-tree-footer-button" onClick={() => handlers.current.onOpenArchive()}>
             <ArchiveIcon size={12} />
             <span className="session-tree-footer-label">{t("sidebar.archivedCount", { count: row.count })}</span>
+            <ChevronIcon size={10} className="session-tree-footer-chevron" />
+          </button>
+        </div>
+      );
+    case "footer-hidden":
+      return (
+        <div className="session-tree-row session-tree-footer" style={style} data-row-key={row.key}>
+          <button type="button" className="session-tree-footer-button" onClick={(event) => handlers.current.onOpenHiddenProjects(event.currentTarget)}>
+            <EyeIcon size={12} />
+            <span className="session-tree-footer-label">{t("sidebar.hiddenProjects", { count: row.count })}</span>
             <ChevronIcon size={10} className="session-tree-footer-chevron" />
           </button>
         </div>

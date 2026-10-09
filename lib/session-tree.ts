@@ -25,11 +25,11 @@ import { workspaceKeyOf } from "./workspace-memory";
 export type SidebarLayout = "desktop" | "mobile";
 export type SidebarRowKind =
   | "pinned-header" | "session" | "pinned-more" | "group" | "group-more" | "group-empty"
-  | "spacer" | "footer-open" | "footer-archived" | "archive-group";
+  | "spacer" | "footer-open" | "footer-archived" | "footer-hidden" | "archive-group";
 
 export const SIDEBAR_ROW_HEIGHTS: Record<SidebarLayout, Record<SidebarRowKind, number>> = {
-  desktop: { "pinned-header": 26, session: 32, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 30, spacer: 8, "footer-open": 30, "footer-archived": 30, "archive-group": 26 },
-  mobile: { "pinned-header": 30, session: 44, "pinned-more": 36, group: 40, "group-more": 36, "group-empty": 40, spacer: 8, "footer-open": 44, "footer-archived": 44, "archive-group": 30 },
+  desktop: { "pinned-header": 26, session: 32, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 30, spacer: 8, "footer-open": 30, "footer-archived": 30, "footer-hidden": 30, "archive-group": 26 },
+  mobile: { "pinned-header": 30, session: 44, "pinned-more": 36, group: 40, "group-more": 36, "group-empty": 40, spacer: 8, "footer-open": 44, "footer-archived": 44, "footer-hidden": 44, "archive-group": 30 },
 };
 export const GROUP_VISIBLE_LIMIT = 6;
 export const PINNED_VISIBLE_LIMIT = 8;
@@ -55,6 +55,7 @@ export type SidebarRow =
   | { kind: "spacer"; key: string }
   | { kind: "footer-open"; key: "footer-open" }
   | { kind: "footer-archived"; key: "footer-archived"; count: number }
+  | { kind: "footer-hidden"; key: "footer-hidden"; count: number }
   | { kind: "archive-group"; key: string; project: SidebarProject; count: number };
 
 export interface SessionTreeInput {
@@ -71,12 +72,16 @@ export interface SessionTreeInput {
   /** Families revealed beyond the base limit by "show more", per projectKey or PINNED_MORE_KEY. */
   moreShown: Readonly<Record<string, number>>;
   pinnedCollapsed: boolean;
+  /** Browser view preference; even the current or running project may be hidden. */
+  hiddenProjectKeys?: readonly string[];
 }
 
 export interface SessionTreeModel {
   rows: SidebarRow[];
   /** Projects in group order. */
   projects: SidebarProject[];
+  /** Hidden projects remain available to the restore menu and project pickers. */
+  hiddenProjects: SidebarProject[];
   /** Archived families across all projects. */
   archivedCount: number;
   /**
@@ -323,6 +328,7 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
   const { uiState, runningIds, currentProject } = input;
   const families = listSessionFamilies(input.sessions);
   const resolver = createProjectResolver(uiState, currentProject);
+  const hiddenKeys = new Set(input.hiddenProjectKeys);
 
   let archivedCount = 0;
   const pinnedFamilies: SessionFamily[] = [];
@@ -333,12 +339,13 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
   const savedKeys = new Set<string>();
 
   for (const family of families) {
+    resolver.noteFamily(family);
     if (isFamilyArchived(family, uiState, runningIds)) {
       archivedCount++;
       continue;
     }
-    resolver.noteFamily(family);
     const key = familyProjectKey(family);
+    if (hiddenKeys.has(key)) continue;
     const activity = timeOf(family.latestModified);
     projectActivity.set(key, Math.max(projectActivity.get(key) ?? -Infinity, activity));
     if (!family.root.transient) savedKeys.add(key);
@@ -383,7 +390,7 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
   const projectKeys: string[] = [...projectFamilies.keys()];
   const seen = new Set(projectKeys);
   const addKey = (key: string) => {
-    if (seen.has(key)) return;
+    if (seen.has(key) || hiddenKeys.has(key)) return;
     seen.add(key);
     projectKeys.push(key);
   };
@@ -454,8 +461,10 @@ export function buildSessionTree(input: SessionTreeInput): SessionTreeModel {
 
   rows.push({ kind: "footer-open", key: "footer-open" });
   if (archivedCount > 0) rows.push({ kind: "footer-archived", key: "footer-archived", count: archivedCount });
+  const hiddenProjects = [...hiddenKeys].map((key) => resolver.get(key));
+  if (hiddenProjects.length > 0) rows.push({ kind: "footer-hidden", key: "footer-hidden", count: hiddenProjects.length });
 
-  return { rows, projects: orderedProjects, archivedCount, unorderedKeysByBand, projectKeysToRecord };
+  return { rows, projects: orderedProjects, hiddenProjects, archivedCount, unorderedKeysByBand, projectKeysToRecord };
 }
 
 /**

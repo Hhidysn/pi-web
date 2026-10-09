@@ -9,7 +9,7 @@ const jiti = createJiti(import.meta.url, {
 });
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
-const { I18nProvider } = await jiti.import("@/hooks/useI18n.tsx");
+const { I18nProvider } = await jiti.import("@/hooks/useI18n");
 const { SessionTree, sessionRowTitle } = await jiti.import("./SessionTree.tsx");
 const { buildSessionTree, SIDEBAR_ROW_HEIGHTS } = await jiti.import("@/lib/session-tree.ts");
 const { messages: zhCN } = (await jiti.import("@/lib/i18n/messages/zh-CN.ts")).zhCNLocale;
@@ -58,6 +58,8 @@ const defaults = {
   onDeleteCancel: noop,
   onGroupNew: noop,
   onGroupMenu: noop,
+  onHideProject: noop,
+  onOpenHiddenProjects: noop,
   onOpenOtherProject: noop,
   onOpenArchive: noop,
 };
@@ -113,6 +115,15 @@ function groupRow(extra = {}, projectExtra = {}) {
 }
 
 const footer = [{ kind: "footer-open", key: "footer-open" }];
+
+test("project hide and restore controls have accessible labels on desktop and mobile", () => {
+  for (const layout of ["desktop", "mobile"]) {
+    const html = render({ layout, rows: [groupRow(), { kind: "footer-hidden", key: "footer-hidden", count: 1 }] });
+    assert.match(rowMarkup(html, `group:${project.key}`), /aria-label="Hide app from sidebar \(keeps conversations\)"/);
+    assert.match(rowMarkup(html, "footer-hidden"), /<button[^>]*class="session-tree-footer-button"/);
+    assert.match(html, /Hidden projects · 1/);
+  }
+});
 
 test("the pinned header toggles the section and shows activity dots only while collapsed", () => {
   const collapsed = rowMarkup(render({
@@ -448,8 +459,8 @@ test("row titles fall back from the name to the first message to the id", () => 
 
 test("row controls stop clicks from also selecting the row and keys skip IME composition", () => {
   const actionClicks = source.match(/onClick=\{\(event\) => \{\s*event\.stopPropagation\(\);/g) ?? [];
-  // archive, restore, ⋯, group +, group ⋯
-  assert.equal(actionClicks.length, 5);
+  // archive, restore, ⋯, group hide, group +, group ⋯
+  assert.equal(actionClicks.length, 6);
   assert.match(source, /function isImeKey\(event: ReactKeyboardEvent\): boolean \{\s*return event\.nativeEvent\.isComposing \|\| event\.keyCode === 229;/);
   assert.match(source, /if \(isImeKey\(event\)\) return;\s*if \(event\.key === "Enter"\)/);
   assert.match(source, /if \(event\.key !== "Escape" \|\| isImeKey\(event\)\) return;\s*event\.preventDefault\(\);\s*event\.stopPropagation\(\);\s*handlers\.current\.onDeleteCancel\(\);/);

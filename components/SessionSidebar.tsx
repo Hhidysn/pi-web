@@ -24,10 +24,12 @@ import {
 import {
   forgetRetiredSidebarKeys,
   loadGroupExpansion,
+  loadHiddenProjectKeys,
   loadPinnedCollapsed,
   loadShowIgnoredFiles,
   loadSidebarTab,
   saveGroupExpansion,
+  saveHiddenProjectKeys,
   savePinnedCollapsed,
   saveShowIgnoredFiles,
   saveSidebarTab,
@@ -249,7 +251,8 @@ type SessionRow = Extract<SidebarRow, { kind: "session" }>;
 /** The one popup menu of the sidebar; kept here, above the virtualized rows. */
 type SidebarMenuState =
   | { kind: "row"; row: SessionRow; anchor: SidebarMenuAnchor; opener: HTMLElement | null }
-  | { kind: "group"; project: SidebarProject; olderCount: number; anchor: SidebarMenuAnchor; opener: HTMLElement };
+  | { kind: "group"; project: SidebarProject; olderCount: number; anchor: SidebarMenuAnchor; opener: HTMLElement }
+  | { kind: "hidden-projects"; anchor: SidebarMenuAnchor; opener: HTMLElement };
 
 const UNREAD_SESSIONS_STORAGE_KEY = "pi-web:unread-session-ids";
 const LAST_CUSTOM_CWD_STORAGE_KEY = "pi-web:last-custom-cwd";
@@ -456,6 +459,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // more" has revealed per group (SHOW_MORE_STEP a click), the pinned section,
   // the archive view.
   const [groupExpansion, setGroupExpansion] = useState<Readonly<Record<string, boolean>>>({});
+  const [hiddenProjectKeys, setHiddenProjectKeys] = useState<string[]>([]);
   const [moreShown, setMoreShown] = useState<Readonly<Record<string, number>>>({});
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false);
   const [archiveView, setArchiveView] = useState(false);
@@ -528,6 +532,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     if (tab !== "sessions") setSidebarTab(tab);
     const groups = loadGroupExpansion();
     if (Object.keys(groups).length > 0) setGroupExpansion(groups);
+    setHiddenProjectKeys(loadHiddenProjectKeys());
     if (loadPinnedCollapsed()) setPinnedCollapsed(true);
     if (loadShowIgnoredFiles()) setShowIgnoredFiles(true);
     forgetRetiredSidebarKeys();
@@ -1202,7 +1207,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     groupExpansion,
     moreShown,
     pinnedCollapsed,
-  }), [allSessions, uiState, runningSessionIds, unreadSessionIds, selectedSessionId, currentProject, groupExpansion, moreShown, pinnedCollapsed]);
+    hiddenProjectKeys,
+  }), [allSessions, uiState, runningSessionIds, unreadSessionIds, selectedSessionId, currentProject, groupExpansion, moreShown, pinnedCollapsed, hiddenProjectKeys]);
   const archiveRows = useMemo(() => (archiveView ? buildArchiveRows({
     sessions: allSessions,
     uiState,
@@ -1247,8 +1253,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   // with the names the user gave them.
   const projectNames = uiState.projectNames;
   const projectChoiceList = useMemo(
-    () => mergeProjectChoices(model.projects, recentProjects, projectNames),
-    [model.projects, recentProjects, projectNames],
+    () => mergeProjectChoices([...model.projects, ...model.hiddenProjects], recentProjects, projectNames),
+    [model.projects, model.hiddenProjects, recentProjects, projectNames],
   );
 
   // What both pickers show for this cwd: the project, its worktrees where the
@@ -1766,6 +1772,25 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
 
   const closeMenu = useCallback(() => setMenu(null), []);
 
+  const hideProject = (project: SidebarProject) => {
+    const next = [...hiddenProjectKeys, project.key];
+    setHiddenProjectKeys(next);
+    saveHiddenProjectKeys(next);
+    focusAfterCommit(() => sessionsPanelRef.current?.querySelector<HTMLElement>('[data-row-key="footer-hidden"] button') ?? selectedTabButton());
+  };
+
+  const restoreProject = (project: SidebarProject) => {
+    const next = hiddenProjectKeys.filter((key) => key !== project.key);
+    setHiddenProjectKeys(next);
+    saveHiddenProjectKeys(next);
+    treeRevealIdRef.current += 1;
+    const opener = menu?.opener;
+    setTreeReveal({ id: treeRevealIdRef.current, at: Date.now(), rowKey: `group:${project.key}`,
+      takeFocusFrom: (active) => active === opener || active === selectedTabButton() });
+    // Archived-only or removed projects have no group to reveal.
+    focusAfterCommit(() => groupHeaderButton(project.key));
+  };
+
   // After a right-click menu, focus returns to where it was unless the chosen
   // action put it somewhere (a rename field, a delete confirmation).
   useEffect(() => {
@@ -1980,12 +2005,24 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     menuLabel = t("sidebar.projectActions", { name: project.name });
     menuItems = groupMenuItems(project, menu.olderCount);
     menuWidth = 264;
+  } else if (menu?.kind === "hidden-projects") {
+    menuLabel = t("sidebar.hiddenProjects", { count: model.hiddenProjects.length });
+    menuTitle = menuLabel;
+    menuItems = model.hiddenProjects.map((project) => ({
+      type: "item",
+      id: project.key,
+      label: t("sidebar.restoreProject", { name: project.name }),
+      title: project.root,
+      icon: <RestoreIcon />,
+      onSelect: () => restoreProject(project),
+    }));
   }
 
   // The tree row (and the button in it) that the open menu belongs to.
   const activeMenuRowKey = menu?.kind === "row"
     ? menu.row.key
-    : menu?.kind === "group" ? `group:${menu.project.key}` : null;
+    : menu?.kind === "group" ? `group:${menu.project.key}`
+      : menu?.kind === "hidden-projects" ? "footer-hidden" : null;
 
   const treeLayout = isMobile ? "mobile" : "desktop";
   // Until pins and archive have loaded, archived rows would flash in.
@@ -2020,6 +2057,8 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     },
     onGroupNew: handleGroupNew,
     onGroupMenu: handleGroupMenu,
+    onHideProject: hideProject,
+    onOpenHiddenProjects: (opener: HTMLElement) => setMenu({ kind: "hidden-projects", anchor: buttonAnchor(opener, "start"), opener }),
     onOpenOtherProject: handleOpenOtherProject,
     onOpenArchive: openArchiveView,
     // The archive view has no group rows: only the main tree's can be dragged.
