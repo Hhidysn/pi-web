@@ -169,6 +169,8 @@ npm run lint
 
 Do not run `next build` or `npm run build` during normal development. It writes to `.next/` and can interfere with the development server; leave builds for release work.
 
+Remote access: [Private phone access with Tailscale](./docs/tailscale.md).
+
 Contributor guides: [Internationalization](./docs/i18n.md) and [Release process](./docs/release.md).
 
 ## Repository Layout

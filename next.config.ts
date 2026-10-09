@@ -55,8 +55,10 @@ const nextConfig: NextConfig = {
   ],
   // Next 16 blocks cross-origin access to dev resources by default. Allow the
   // loopback and the RFC1918 LAN ranges so the dev server stays reachable
-  // from other machines on the same LAN.
+  // from other machines on the same LAN. HTTPS proxies also need their
+  // explicitly trusted hostnames to reach dev assets and HMR.
   allowedDevOrigins: [
+    ...(process.env.PI_WEB_ALLOWED_HOSTS?.split(",").map((host) => host.trim()).filter(Boolean) ?? []),
     "127.0.0.1",
     "10.*.*.*",
     // 172.16.0.0/12
