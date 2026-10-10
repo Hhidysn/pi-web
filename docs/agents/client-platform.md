@@ -1,5 +1,8 @@
 # Mobile and browser behavior
 
+## Loopback development launcher
+- `public/open-dev.html` is a standalone page so it runs before Next's client modules. On loopback only, it unregisters Pi Web's own `/sw.js` worker and deletes `pi-web-static-*` Cache Storage entries, then replaces the page with `/`. A previously installed production worker can otherwise keep serving stale development chunks while `PwaRegistration` skips registration in dev. Cookies, localStorage (drafts and preferences), session files and other workers/caches are untouched. The local Windows dev launcher uses this entry for both an already-running server and a fresh start; production and npm-package launches keep `/`.
+
 ## Mobile software keyboard (`hooks/useViewportHeight.ts`)
 - While an editor has focus and the visual viewport is more than `KEYBOARD_MIN_HEIGHT_PX` (60px) shorter than `innerHeight / scale`, the hook writes `visualViewport.height` to `--app-viewport-height`; smaller shrinks are Safari toolbars. Always compare against that zoom-corrected height, or iOS auto-zoom and pinch zoom leave the composer behind the keyboard.
 - WebKit settles the shrunken height only after the keyboard animation, often without another `resize` (bugs.webkit.org 265578), and an IME candidate bar resizes the keyboard with no viewport event at all. So every trigger, composition/input/keyup events on a focused editor included, starts one non-restarting chain of re-reads (`SETTLE_DELAYS_MS`). Reading once per event keeps the full-screen height, and `scrollTo(0, 0)` then fights the page scrolling to the caret: a jittering composer.

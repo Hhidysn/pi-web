@@ -16,6 +16,8 @@ Open `https://<MagicDNS hostname>:8443/` on the phone and sign in with the Pi We
 
 `serve --bg` persists across Tailscale restarts. Pi Web must also start after Windows sign-in; a shortcut to your launcher in `shell:startup` provides that. The computer must remain awake for remote access.
 
+For a loopback development launch, open `http://127.0.0.1:30141/open-dev.html` instead of `/`. This entry clears only Pi Web's static asset cache and old worker before opening the app, so switching versions does not require a manual hard reload. Use the same entry when the server is already running, and have the launcher's readiness check require a successful HTTP response. Production and phone URLs stay as above.
+
 Serve is limited to the tailnet. Keep an existing Funnel mapping for other applications separate from Pi Web's private Serve endpoint.
 
 Android permits one system VPN at a time. If FlClash already provides it, use its authenticated Mihomo Tailscale node and domain/IP rules for Pi Web. Keep the standalone Tailscale VPN disconnected in that setup.
