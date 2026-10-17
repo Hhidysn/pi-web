@@ -1,12 +1,12 @@
 const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
-type EffortLevel = typeof EFFORT_LEVELS[number];
+type ThinkingLevel = typeof EFFORT_LEVELS[number] | "off";
 
 export interface DiscoveredModel {
   id: string;
   name?: string;
   // Capabilities the upstream list publishes, as models.json fields (#856).
   reasoning?: true;
-  thinkingLevelMap?: Partial<Record<EffortLevel, string | null>>;
+  thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;
   contextWindow?: number;
   maxTokens?: number;
 }
@@ -19,7 +19,9 @@ const CONTEXT_WINDOW_FIELDS = [
 ];
 const MAX_TOKENS_FIELDS = ["max_output_tokens", "maxOutputTokens", "max_completion_tokens", "outputTokenLimit"];
 const REASONING_FIELDS = ["supports_reasoning", "supportsReasoning", "reasoning", "thinking"];
-const EFFORT_LIST_FIELDS = ["supported_efforts", "supportedEfforts"];
+// Gateways name the advertised levels differently: a plain list of pi's own
+// levels, or objects naming one (`supported_reasoning_levels`).
+const EFFORT_LIST_FIELDS = ["supported_efforts", "supportedEfforts", "supported_reasoning_levels"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -38,23 +40,34 @@ function firstPositiveInteger(value: Record<string, unknown>, fields: readonly s
   return undefined;
 }
 
+function advertisedLevel(entry: unknown): string | undefined {
+  if (typeof entry === "string") return cleanString(entry);
+  if (isRecord(entry)) return cleanString(entry.effort);
+  return undefined;
+}
+
 /**
- * An advertised effort list names pi's own levels, which pi sends as the
- * effort when thinkingLevelMap has no entry. Every level it leaves out is
- * marked unsupported (null), and `xhigh` / `max` need an entry to be offered at
- * all. `off` stays unmapped: the list does not say whether thinking can be
- * turned off. A list naming none of pi's levels maps nothing.
+ * An advertised level list names pi's own levels, which pi sends as the effort
+ * when thinkingLevelMap has no entry. Every level of EFFORT_LEVELS is written:
+ * an advertised one maps to itself, the rest are unsupported (null) — `xhigh` /
+ * `max` need an entry to be offered at all. `off` is one of pi's levels too, but
+ * the key is written only when the list names it: a list that does not say
+ * whether thinking can be turned off leaves `off` untouched. Levels pi does not
+ * know (`none`, `ultra`) are dropped, and a list naming none of pi's levels maps
+ * nothing.
  */
 function thinkingLevelMapFromEfforts(value: Record<string, unknown>): DiscoveredModel["thinkingLevelMap"] {
   const list = EFFORT_LIST_FIELDS.map((field) => value[field]).find(Array.isArray);
   if (!list) return undefined;
-  const advertised = new Set(list.filter((effort): effort is string => typeof effort === "string"));
+  const advertised = new Set<string>();
+  for (const entry of list) {
+    const level = advertisedLevel(entry);
+    if (level) advertised.add(level);
+  }
   if (!EFFORT_LEVELS.some((level) => advertised.has(level))) return undefined;
   const map: NonNullable<DiscoveredModel["thinkingLevelMap"]> = {};
-  for (const level of EFFORT_LEVELS) {
-    if (!advertised.has(level)) map[level] = null;
-    else if (level === "xhigh" || level === "max") map[level] = level;
-  }
+  for (const level of EFFORT_LEVELS) map[level] = advertised.has(level) ? level : null;
+  if (advertised.has("off")) map.off = "off";
   return map;
 }
 
@@ -82,7 +95,10 @@ function modelFromValue(value: unknown): DiscoveredModel | null {
   if (!rawId) return null;
   const id = rawId.startsWith("models/") ? rawId.slice("models/".length) : rawId;
   if (!id) return null;
-  const name = cleanString(value.display_name)
+  // A gateway may publish its own label for a routed model (`magpie_label`),
+  // which names it more precisely than the upstream display name.
+  const name = cleanString(value.magpie_label)
+    ?? cleanString(value.display_name)
     ?? cleanString(value.displayName)
     ?? (cleanString(value.id) || cleanString(value.model) ? cleanString(value.name) : undefined);
   return { id, ...(name && name !== id ? { name } : {}), ...capabilitiesFromValue(value) };
