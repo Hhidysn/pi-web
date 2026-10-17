@@ -5,7 +5,10 @@ export interface DiscoveredModel {
   id: string;
   name?: string;
   // Capabilities the upstream list publishes, as models.json fields (#856).
-  reasoning?: true;
+  // `false` is a declaration too: pi reads an absent `reasoning` as support, so
+  // a gateway that publishes `reasoning: false` has to reach models.json as
+  // `false`, not as a missing key.
+  reasoning?: boolean;
   thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;
   contextWindow?: number;
   maxTokens?: number;
@@ -47,6 +50,20 @@ function advertisedLevel(entry: unknown): string | undefined {
 }
 
 /**
+ * The first boolean a gateway publishes under one of the reasoning field names.
+ * The value is kept as published: `true` and `false` are both declarations, and
+ * only an absent field leaves the key out of the entry. Non-boolean values
+ * (`"yes"`, numbers) are not declarations and stay ignored.
+ */
+function reasoningFromValue(value: Record<string, unknown>): boolean | undefined {
+  for (const field of REASONING_FIELDS) {
+    const raw = value[field];
+    if (typeof raw === "boolean") return raw;
+  }
+  return undefined;
+}
+
+/**
  * An advertised level list names pi's own levels, which pi sends as the effort
  * when thinkingLevelMap has no entry. Every level of EFFORT_LEVELS is written:
  * an advertised one maps to itself, the rest are unsupported (null) — `xhigh` /
@@ -72,12 +89,13 @@ function thinkingLevelMapFromEfforts(value: Record<string, unknown>): Discovered
 }
 
 function capabilitiesFromValue(value: Record<string, unknown>): Omit<DiscoveredModel, "id" | "name"> {
-  const reasoning = REASONING_FIELDS.some((field) => value[field] === true);
-  const thinkingLevelMap = reasoning ? thinkingLevelMapFromEfforts(value) : undefined;
+  const reasoning = reasoningFromValue(value);
+  // A level list only means something for a model that can reason at all.
+  const thinkingLevelMap = reasoning === true ? thinkingLevelMapFromEfforts(value) : undefined;
   const contextWindow = firstPositiveInteger(value, CONTEXT_WINDOW_FIELDS);
   const maxTokens = firstPositiveInteger(value, MAX_TOKENS_FIELDS);
   return {
-    ...(reasoning ? { reasoning: true } : {}),
+    ...(reasoning === undefined ? {} : { reasoning }),
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(contextWindow ? { contextWindow } : {}),
     ...(maxTokens ? { maxTokens } : {}),
