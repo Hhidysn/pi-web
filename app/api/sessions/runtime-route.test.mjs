@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import test from "node:test";
 import { createJiti } from "jiti";
@@ -264,6 +264,90 @@ test("deleting a session removes all persisted subagent descendants", async (t) 
   await assert.rejects(readFile(parentPath), { code: "ENOENT" });
   await assert.rejects(readFile(childPath), { code: "ENOENT" });
   await assert.rejects(readFile(grandchildPath), { code: "ENOENT" });
+});
+
+test("session detail relates a nested pi-subagents run by its layout and leaves a marked run alone", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "pi-web-nested-relation-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = dir;
+  invalidateSessionListCache();
+  // The extension nests a run below a directory named after the parent session's
+  // own file; the flat session beside it carries pi-web's own marker.
+  const parentId = "nested-relation-parent";
+  const nestedId = "nested-relation-run";
+  const markedId = "nested-relation-marked";
+  const parentDirName = `2026-10-05T18-24-29-471Z_${parentId}`;
+  const runId = "07d321a0-bf01-4c99-be99-ce82700258ce";
+  const project = join(dir, "sessions", "--tmp-nested-relation--");
+  const parentPath = join(project, `${parentDirName}.jsonl`);
+  const nestedPath = join(project, parentDirName, runId, "run-0", "session.jsonl");
+  const markedPath = join(project, `${markedId}.jsonl`);
+  const timestamp = "2026-10-05T18:24:29.471Z";
+  const header = (id) => JSON.stringify({ type: "session", version: 3, id, timestamp, cwd: dir });
+  await mkdir(dirname(nestedPath), { recursive: true });
+  await writeFile(parentPath, `${header(parentId)}\n`);
+  await writeFile(nestedPath, `${header(nestedId)}\n`);
+  await writeFile(markedPath, [
+    header(markedId),
+    JSON.stringify({
+      type: "custom",
+      customType: "pi-web:subagent",
+      id: "meta",
+      parentId: null,
+      timestamp,
+      data: {
+        version: 1,
+        parentSessionId: parentId,
+        parentSessionPath: parentPath,
+        profile: "Explore",
+        description: "Inspect parser",
+      },
+    }),
+    JSON.stringify({
+      type: "custom",
+      customType: "pi-web:subagent-result",
+      id: "result",
+      parentId: "meta",
+      timestamp,
+      data: { status: "completed" },
+    }),
+    "",
+  ].join("\n"));
+  t.after(async () => {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    invalidateSessionPathCache(nestedId);
+    invalidateSessionPathCache(markedId);
+    invalidateSessionListCache();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const detail = async (id) => {
+    const response = await getSessionDetail(
+      new Request(`http://localhost/api/sessions/${id}`),
+      { params: Promise.resolve({ id }) },
+    );
+    assert.equal(response.status, 200);
+    return (await response.json()).info;
+  };
+
+  // The nested file holds neither `parentSession` nor a pi-web marker: the
+  // viewer's pill reads the layout, exactly as the Agents panel row does.
+  assert.deepEqual((await detail(nestedId)).relation, {
+    kind: "subagent",
+    parentSessionId: parentId,
+    profile: "pi-subagents",
+    description: `Run ${runId.slice(0, 8)}`,
+    status: "interrupted",
+  });
+  // A pi-web run keeps its marker as the authority: same route, unchanged profile and status.
+  assert.deepEqual((await detail(markedId)).relation, {
+    kind: "subagent",
+    parentSessionId: parentId,
+    profile: "Explore",
+    description: "Inspect parser",
+    status: "completed",
+  });
 });
 
 test("live detail and state routes work without a persisted JSONL file", async (t) => {

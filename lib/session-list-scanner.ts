@@ -18,6 +18,7 @@ import type { Dirent } from "node:fs";
 import { basename, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { writePrivateFileAtomicSync } from "./atomic-file";
+import { nestedSubagentSessionFiles } from "./nested-subagent-sessions";
 
 export interface ScannedSessionInfo {
 	path: string;
@@ -492,6 +493,9 @@ async function enumerateSessionFiles(sessionsDir: string): Promise<string[]> {
 		} catch {
 			// unreadable project dir: same skip-as-absent semantics as the SDK
 		}
+		// The pi-subagents extension nests its runs below the parent session's
+		// own directory, where a flat readdir never sees them.
+		for (const nested of await nestedSubagentSessionFiles(dirPath)) files.push(nested.filePath);
 	}
 	return files;
 }

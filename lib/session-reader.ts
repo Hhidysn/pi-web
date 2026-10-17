@@ -15,6 +15,7 @@ import { skillExpansionToCommand } from "./slash-display";
 import { MAX_TOOL_RESULT_IMAGE_BYTES, TOOL_RESULT_IMAGE_MIMES } from "./tool-result-images";
 import { resolveProject, type ProjectInfo } from "./worktree";
 import { readSubagentRun, SUBAGENT_META_TYPE } from "./subagents";
+import { findNestedSessionPathById, nestedSubagentRelation } from "./nested-subagent-sessions";
 import { checkSessionMembership, listSessionsIncremental, scanSessionFileInfo, type ScannedSessionInfo } from "./session-list-scanner";
 
 export { getAgentDir };
@@ -187,6 +188,9 @@ export function mergeSessionLists(
 
 type ScannedSubagent = NonNullable<ReturnType<typeof readSubagentRun>>;
 
+/** What a row's subagent relation needs: pi-web's own run or a nested one (`lib/nested-subagent-sessions.ts`). */
+type SessionSubagent = Pick<ScannedSubagent, "parentSessionId" | "profile" | "description" | "status">;
+
 /**
  * A fork's or subagent's run, read from its file, per scanned row. The scanner
  * hands back the same row object while the file's size and mtime stay the same
@@ -199,11 +203,14 @@ const scannedSubagentRuns = new WeakMap<ScannedSessionInfo, ScannedSubagent | nu
 function resolveScannedSessionRelation(
   scanned: ScannedSessionInfo,
   pathToId: Map<string, string>,
-): { originSessionId?: string; subagent: ScannedSubagent | null } {
+): { originSessionId?: string; subagent: SessionSubagent | null } {
   const originSessionId = scanned.parentSessionPath
     ? pathToId.get(sessionPathKey(scanned.parentSessionPath))
     : undefined;
-  if (!scanned.parentSessionPath) return { originSessionId, subagent: null };
+  // A pi-subagents extension run carries neither `parentSession` nor a pi-web
+  // marker: only its layout below the parent session's own directory says whose
+  // run it is. pi-web's own subagents keep their read entries as the authority.
+  if (!scanned.parentSessionPath) return { originSessionId, subagent: nestedSubagentRelation(scanned.path) };
 
   const cached = scannedSubagentRuns.get(scanned);
   if (cached !== undefined) return { originSessionId, subagent: cached };
@@ -422,6 +429,14 @@ async function findSessionPathById(sessionId: string): Promise<string | null> {
       // catalogue fallback for its current resolution semantics.
       if (match && match !== candidate) return null;
       match = candidate;
+    }
+
+    // A flat file did not answer it: try the pi-subagents extension's nested
+    // runs, whose file names carry the run id instead of the session id. Only
+    // while nothing matched, so a found flat candidate keeps precedence.
+    if (match === undefined) {
+      const nested = await findNestedSessionPathById(sessionId, projectPath, readSessionHeader);
+      if (nested) match = nested;
     }
   }
 
