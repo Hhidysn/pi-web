@@ -1,0 +1,3 @@
+# cmd and wscript want CRLF batch/script files; keep them that way on checkout.
+scripts/windows/pi-web/*.cmd text eol=crlf
+scripts/windows/pi-web/*.vbs text eol=crlf
