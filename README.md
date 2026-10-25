@@ -187,6 +187,8 @@ Before starting on a feature, read [Contributing](./CONTRIBUTING.md) for what is
 
 Remote access: [Private phone access with Tailscale](./docs/tailscale.md).
 
+本地 fork：[当前分支差异与实现说明](./docs/fork-status.zh-CN.md)。
+
 Contributor guides: [Internationalization](./docs/i18n.md) and [Release process](./docs/release.md).
 
 ## Repository Layout

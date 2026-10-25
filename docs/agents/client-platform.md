@@ -1,7 +1,7 @@
 # Mobile and browser behavior
 
 ## Loopback development launcher
-- `public/open-dev.html` is a standalone page so it runs before Next's client modules. On loopback only, it unregisters Pi Web's own `/sw.js` worker and deletes `pi-web-static-*` Cache Storage entries, then replaces the page with `/`. A previously installed production worker can otherwise keep serving stale development chunks while `PwaRegistration` skips registration in dev. Cookies, localStorage (drafts and preferences), session files and other workers/caches are untouched. The local Windows dev launcher uses this entry for both an already-running server and a fresh start; production and npm-package launches keep `/`.
+- `public/open-dev.html` 在 Next 客户端模块前运行。仅在 loopback 清理同源 `/sw.js` 的非 push-only 注册与 `pi-web-static-*` 缓存，再进入 `/`；保留 `mode=push-only` worker，以及登录 cookie、localStorage 草稿、会话文件和其他缓存。开发模式已有 push-only worker，但它不处理旧生产静态缓存。本机安装的 Windows 开发启动器使用此入口；仓库模板尚未同步，见 `scripts/windows/pi-web/README.md`。
 
 ## Mobile software keyboard (`hooks/useViewportHeight.ts`)
 - While an editor has focus and the visual viewport is more than `KEYBOARD_MIN_HEIGHT_PX` (60px) shorter than `innerHeight / scale`, the hook writes `visualViewport.height` to `--app-viewport-height`; smaller shrinks are Safari toolbars. Always compare against that zoom-corrected height, or iOS auto-zoom and pinch zoom leave the composer behind the keyboard.

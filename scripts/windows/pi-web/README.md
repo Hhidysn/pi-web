@@ -15,6 +15,14 @@ Install or update them by copying all four files into `%LOCALAPPDATA%\pi-web` (n
 `pi-web.ico` and the logs). Keep them CRLF — `.gitattributes` enforces that for this
 folder, because cmd is happiest with CRLF batch files.
 
+## 模板与本机安装版本的差异（2026-10-24）
+
+本目录是可跟踪的模板，不保证与 `%LOCALAPPDATA%\pi-web` 中已安装的文件同步。本次核对，`start-pi-web.cmd`、`open-when-ready.cmd`、`stop-pi-web.cmd` 的哈希不同，VBS 相同。
+
+已安装版本会在 fork 开发模式下打开 `/open-dev.html`，并以 `/api/web-auth` 的成功 HTTP 响应作为就绪条件。此处模板仍打开 `/`；其 `curl` 探测没有 `-f`，无 curl 时还会退回端口监听检测。因此直接用模板覆盖本机文件，会丢失上述启动修复。模板同步前应先比较两份文件。
+
+相关实现与上游反馈边界见 [当前分支差异](../../../docs/fork-status.zh-CN.md)。
+
 ## `start-pi-web.cmd`
 
 ```
