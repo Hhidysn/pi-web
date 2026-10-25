@@ -195,10 +195,15 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
       if (typeof window === "undefined" || !("Notification" in window)) {
         throw new Error("unsupported or not permitted");
       }
+      // On iOS the permission must be asked for in the tap itself, not after
+      // an await: a service worker that is not ready yet would spend the
+      // gesture. Everywhere else the registration is already there.
       const permission = Notification.permission === "default"
         ? await Notification.requestPermission()
         : Notification.permission;
       if (permission !== "granted") throw new Error("unsupported or not permitted");
+      const registration = await navigator.serviceWorker.ready.catch(() => null);
+      if (!registration) throw new Error("service worker not ready");
       const ok = await setupPushSubscription(locale);
       if (!ok) throw new Error("unsupported or not permitted");
       setPushStatus({ kind: "ok", message: t("settings.pushRegistered") });

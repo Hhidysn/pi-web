@@ -57,3 +57,14 @@ test("a cleanup failure shows a retry message instead of repeatedly reloading a 
   assert.deepEqual(state.destinations, []);
   assert.match(state.status, /重新点击快捷方式/);
 });
+
+test("the dev entry keeps the push-only worker: it serves nothing but receives the completion push", async () => {
+  const state = await open({ registrations: [
+    ["prod-worker", "/sw.js?v=1.2.3"],
+    ["push-worker", "/sw.js?v=1.2.3&mode=push-only"],
+  ] });
+  assert.deepEqual(state.unregistered, ["prod-worker"]);
+  // The static caches still go: they belong to the worker that just went.
+  assert.deepEqual(state.deleted, ["pi-web-static-old", "pi-web-static-new"]);
+  assert.deepEqual(state.destinations, ["/"]);
+});

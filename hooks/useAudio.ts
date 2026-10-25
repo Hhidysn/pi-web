@@ -9,6 +9,22 @@ export const AUDIO_IDLE_SUSPEND_MS = 1000;
 // the context back (a page with no gesture yet, a locked phone), and a chime
 // that plays once the user is back announces nothing.
 export const AUDIO_STALE_CHIME_MS = 3000;
+// A hidden page's timers are throttled (a background tab's poll runs about
+// once a minute) and its context is suspended, so the run it reports finished
+// minutes ago: the delay is the notice, not a stale chime. The visible budget
+// would drop exactly the background completion the chime exists for.
+export const AUDIO_HIDDEN_STALE_CHIME_MS = 90_000;
+
+/**
+ * How long a chime may wait for its context and still be worth playing: a
+ * visible page's chime announces what the user is watching, so a late one is
+ * noise; a hidden page's is the notice itself, and its timers are throttled.
+ */
+function staleChimeBudget(): number {
+  return typeof document !== "undefined" && document.visibilityState === "hidden"
+    ? AUDIO_HIDDEN_STALE_CHIME_MS
+    : AUDIO_STALE_CHIME_MS;
+}
 
 function playTone(ctx: AudioContext) {
   const now = ctx.currentTime;
@@ -125,7 +141,7 @@ export function useAudio() {
     };
   }, [getCtx, runBriefly, scheduleIdleSuspend]);
 
-  const playDone = useCallback(() => {
+  const playDone = useCallback((maxResumeDelayMs: number = staleChimeBudget()) => {
     if (!enabledRef.current) return;
     const ctx = getCtx();
     if (!ctx) return;
@@ -133,7 +149,7 @@ export function useAudio() {
     runBriefly(ctx, () => {
       // Sound was turned off while the context resumed.
       if (!enabledRef.current) return;
-      if (Date.now() - requestedAt > AUDIO_STALE_CHIME_MS) return;
+      if (Date.now() - requestedAt > maxResumeDelayMs) return;
       try {
         playTone(ctx);
       } catch {

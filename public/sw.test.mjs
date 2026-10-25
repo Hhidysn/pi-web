@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test, { mock } from "node:test";
+import vm from "node:vm";
 
 const listeners = new Map();
 globalThis.self = {
@@ -335,5 +337,74 @@ test("a response that arrives in time is not cut off mid-stream", async () => {
     assert.match(await response.text(), /<title>Pi Web<\/title>/);
   } finally {
     mock.timers.reset();
+  }
+});
+
+// The development worker (`?mode=push-only`) exists so a locked phone can be
+// told a run finished. It must never take part in serving the app: `next dev`
+// owns chunks and HMR.
+test("a push-only worker leaves every request to the browser and caches nothing", async () => {
+  const devListeners = new Map();
+  const devSelf = {
+    location: { href: "https://pi.test/sw.js?v=dev&mode=push-only", origin: "https://pi.test" },
+    addEventListener: (type, listener) => devListeners.set(type, listener),
+    clients: null,
+  };
+  let installed = 0;
+  let cacheOpened = 0;
+  let fetched = 0;
+  devSelf.skipWaiting = async () => { installed++; };
+  const claimed = [];
+  devSelf.clients = { claim: async () => { claimed.push(true); }, matchAll: async () => [], openWindow: async () => {} };
+  const previous = { self: globalThis.self, caches: globalThis.caches, fetch: globalThis.fetch };
+  globalThis.self = devSelf;
+  globalThis.caches = {
+    open: async () => { cacheOpened++; return { addAll: async () => {}, put: async () => {} }; },
+    keys: async () => { cacheOpened++; return []; },
+    match: async () => { cacheOpened++; return undefined; },
+  };
+  globalThis.fetch = async () => { fetched++; return new Response("dev"); };
+
+  try {
+    // A fresh module instance: the worker reads its mode from its own URL.
+    const source = await readFile(new URL("./sw.js", import.meta.url), "utf8");
+    const script = new vm.Script(source, { filename: "sw.js" });
+    script.runInNewContext({
+      self: devSelf,
+      caches: globalThis.caches,
+      fetch: globalThis.fetch,
+      Request, Response, URL, AbortController, DOMException,
+      setTimeout, clearTimeout, setImmediate,
+    });
+
+    let installPending;
+    devListeners.get("install")({ waitUntil: (promise) => { installPending = promise; } });
+    await installPending;
+    assert.equal(installed, 1, "install takes over at once");
+    assert.equal(cacheOpened, 0, "install precaches nothing");
+
+    let activatePending;
+    devListeners.get("activate")({ waitUntil: (promise) => { activatePending = promise; } });
+    await activatePending;
+    assert.equal(cacheOpened, 0, "activate deletes no cache");
+    assert.equal(claimed.length, 1, "activate takes over this page's client");
+
+    for (const [url, mode] of [["https://pi.test/", "navigate"], ["https://pi.test/_next/static/chunks/app.js", "cors"]]) {
+      let responded;
+      const request = new Request(url);
+      Object.defineProperty(request, "mode", { value: mode });
+      devListeners.get("fetch")({ request, respondWith: (promise) => { responded = promise; } });
+      assert.equal(responded, undefined, `${mode} requests stay the browser's`);
+    }
+    assert.equal(cacheOpened, 0, "no request reads a cache");
+    assert.equal(fetched, 0, "the worker fetches nothing itself");
+
+    // The push handlers are the reason the worker exists and stay wired.
+    assert.equal(typeof devListeners.get("push"), "function");
+    assert.equal(typeof devListeners.get("notificationclick"), "function");
+  } finally {
+    globalThis.self = previous.self;
+    globalThis.caches = previous.caches;
+    globalThis.fetch = previous.fetch;
   }
 });

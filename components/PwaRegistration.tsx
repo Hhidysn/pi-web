@@ -4,14 +4,21 @@ import { useEffect } from "react";
 
 export function PwaRegistration() {
   useEffect(() => {
-    if (process.env.NODE_ENV !== "production" || !("serviceWorker" in navigator)) {
+    if (!("serviceWorker" in navigator)) {
       return;
     }
 
-    const register = () => {
-      const appVersion = process.env.NEXT_PUBLIC_APP_VERSION ?? "dev";
-      const scriptUrl = `/sw.js?v=${encodeURIComponent(appVersion)}`;
+    const appVersion = process.env.NEXT_PUBLIC_APP_VERSION ?? "dev";
+    // Production registers the offline worker that serves the app. Development
+    // registers a push-only one: `next dev` must own chunks and HMR, but a
+    // backgrounded or locked phone still needs a worker to receive the run's
+    // completion notification (the in-page chime needs a visible page).
+    const pushOnly = process.env.NODE_ENV !== "production";
+    const params = new URLSearchParams({ v: appVersion });
+    if (pushOnly) params.set("mode", "push-only");
+    const scriptUrl = `/sw.js?${params.toString()}`;
 
+    const register = () => {
       void navigator.serviceWorker.register(scriptUrl, {
         scope: "/",
         updateViaCache: "none",

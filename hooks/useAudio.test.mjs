@@ -9,7 +9,7 @@ import { createJiti } from "jiti";
 const shimPath = fileURLToPath(new URL("./__fixtures__/react-hook-shim.mjs", import.meta.url));
 const jiti = createJiti(import.meta.url, { tsconfigPaths: true, alias: { react: shimPath } });
 const { renderHook } = await import(shimPath);
-const { AUDIO_IDLE_SUSPEND_MS, AUDIO_STALE_CHIME_MS, useAudio } = await jiti.import("./useAudio.ts");
+const { AUDIO_IDLE_SUSPEND_MS, AUDIO_STALE_CHIME_MS, AUDIO_HIDDEN_STALE_CHIME_MS, useAudio } = await jiti.import("./useAudio.ts");
 
 const node = () => ({ connect() {}, start() {}, stop() {}, frequency: {}, gain: { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} } });
 
@@ -290,4 +290,33 @@ test("blocked storage leaves sound on, and the toggle still applies to the page"
   view.result.onSoundToggle();
   view.flush();
   assert.equal(view.result.soundEnabled, false, "the toggle applies though it cannot be saved");
+});
+
+test("a hidden page's completion gets a longer resume budget; a visible page still drops a late chime", async () => {
+  // A background tab's poll is throttled to about one run a minute, so the
+  // completion it reports is minutes old by design: that delay is the notice.
+  const previous = globalThis.document;
+  globalThis.document = { visibilityState: "hidden" };
+  try {
+    const view = renderHook(() => useAudio());
+    view.result.playDoneSound();
+    const [ctx] = contexts;
+    mock.timers.tick(AUDIO_STALE_CHIME_MS + 1);
+    await resolveResumes(ctx);
+    assert.equal(ctx.tones, 2, "still announced past the visible-page budget");
+
+    view.result.playDoneSound();
+    mock.timers.tick(AUDIO_HIDDEN_STALE_CHIME_MS + 1);
+    await resolveResumes(ctx);
+    assert.equal(ctx.tones, 2, "dropped past the hidden-page budget, not played late");
+
+    globalThis.document = { visibilityState: "visible" };
+    view.result.playDoneSound();
+    mock.timers.tick(AUDIO_STALE_CHIME_MS + 1);
+    await resolveResumes(ctx);
+    assert.equal(ctx.tones, 2, "a visible page keeps the short budget");
+  } finally {
+    if (previous === undefined) delete globalThis.document;
+    else globalThis.document = previous;
+  }
 });
