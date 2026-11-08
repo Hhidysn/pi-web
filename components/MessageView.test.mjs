@@ -11,6 +11,7 @@ const jiti = createJiti(import.meta.url, {
 const React = await jiti.import("react");
 const { renderToStaticMarkup } = await jiti.import("react-dom/server");
 const {
+  AssistantMessageHeader,
   CompactionSummaryDetails,
   MessageView,
   PatchDiffFiles,
@@ -40,6 +41,38 @@ test("updates a reused message when its written files change", () => {
   const props = { message: { role: "assistant", content: [] } };
   assert.equal(MessageView.compare(props, props), true);
   assert.equal(MessageView.compare(props, { ...props, writtenFiles: [{ path: "/tmp/result.txt" }] }), false);
+});
+
+test("on a narrow phone a message's actions drop their labels and keep their titles", () => {
+  const html = renderMessage({ role: "user", content: "Hi", timestamp: 1 }, { entryId: "entry", onFork: () => {}, onEditContent: () => {} });
+  assert.equal(html.match(/class="message-action-label"/g)?.length, 3);
+  for (const title of ["Copy message", "Edit from here — branches within this session", "New session — creates an independent copy from here"]) {
+    assert.ok(html.includes(`title="${title}"`), title);
+  }
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(css, /@media \(max-width: 380px\) \{\s*\.message-action-label \{\s*display: none;\s*\}\s*\}/);
+});
+
+test("streaming headers preserve counts and speed without showing empty metrics", () => {
+  const renderHeader = (props) => renderToStaticMarkup(React.createElement(
+    I18nProvider, null, React.createElement(AssistantMessageHeader, { modelName: "Test Model", ...props }),
+  ));
+  for (const props of [{}, { estimatedTokens: 0, tps: 20 }]) {
+    const html = renderHeader(props);
+    assert.match(html, />Test Model<\/span>/);
+    assert.doesNotMatch(html, /t\/s|Estimated token count while streaming/);
+  }
+  const tokensOnly = renderHeader({ estimatedTokens: 100 });
+  assert.match(tokensOnly, />100<\/span>/);
+  assert.doesNotMatch(tokensOnly, /t\/s/);
+  const streaming = renderHeader({ estimatedTokens: 1234567, tps: 12345.6 });
+  assert.match(streaming, />1234567<\/span>/);
+  assert.match(streaming, /12345\.6 t\/s/);
+
+  const message = { role: "assistant", provider: "test", model: "model", content: [{ type: "text", text: "Response" }] };
+  const complete = renderMessage(message);
+  assert.doesNotMatch(complete, /Estimated token count while streaming/);
+  assert.match(renderMessage(message, { isStreaming: true }), /Estimated token count while streaming/);
 });
 
 test("matches response model aliases and otherwise includes the provider", () => {
@@ -500,6 +533,51 @@ test("renders partial assistant content before the provider error", () => {
 
   assert.match(html, /Partial response/);
   assert.match(html, /Error: Connection closed/);
+});
+
+test("a stopped reply says Stopped, never the abort error its provider's client threw", () => {
+  for (const errorMessage of ["Request aborted", "This operation was aborted", "OpenAI Responses stream ended before a terminal response event"]) {
+    const html = renderMessage({
+      role: "assistant",
+      provider: "openai",
+      model: "gpt-test",
+      content: [{ type: "text", text: "Partial response" }],
+      stopReason: "aborted",
+      errorMessage,
+    });
+    assert.match(html, /Partial response/);
+    assert.match(html, />Stopped</);
+    assert.ok(!html.includes(errorMessage), errorMessage);
+  }
+
+  // Stopped while it streamed a tool call's arguments: the call never ran, so
+  // its card has no result, and the line under it says why.
+  const html = renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    content: [
+      { type: "text", text: "Writing the file." },
+      { type: "toolCall", toolCallId: "call-stopped-write", toolName: "write", input: { path: "a.txt" } },
+    ],
+    stopReason: "aborted",
+    errorMessage: "This operation was aborted",
+  }, { toolResults: new Map() });
+  assert.ok(html.indexOf(">Stopped<") > html.indexOf("a.txt"));
+});
+
+test("a stopped reply's mark leads its usage line instead of a line of its own", () => {
+  const html = renderMessage({
+    role: "assistant",
+    provider: "anthropic",
+    model: "claude-test",
+    content: [{ type: "text", text: "Partial response" }],
+    stopReason: "aborted",
+    errorMessage: "This operation was aborted",
+    usage: { input: 1200, output: 34, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
+  }, { turnDurationMs: 12_000 });
+  assert.match(html, /<span>Stopped<\/span> <span>·<\/span> <span><span[^>]*>↑<\/span>/);
+  assert.equal(html.split(">Stopped<").length, 2);
 });
 
 test("marks persisted assistant messages with their source entry", () => {
