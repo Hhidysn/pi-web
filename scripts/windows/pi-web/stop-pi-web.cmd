@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 set "PORT=30141"
 set "FORCE=0"
 
@@ -10,47 +10,33 @@ shift
 goto args
 
 :argsdone
-set "PID="
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:"127\.0\.0\.1:%PORT% .*LISTENING"') do set "PID=%%P"
-
-if not defined PID (
+if not exist "%~dp0stop-pi-web.ps1" (
   echo.
-  echo   Pi Web is not running on port %PORT%.
+  echo   [ERROR] Missing helper: %~dp0stop-pi-web.ps1
   echo.
-  ping -n 3 127.0.0.1 >nul
-  exit /b 0
-)
-
-echo.
-echo   Pi Web is listening on port %PORT%  -  PID %PID%
-echo.
-powershell -NoProfile -Command "$p = Get-CimInstance Win32_Process -Filter 'ProcessId=%PID%'; if ($p) { Write-Host ('   name: ' + $p.Name); Write-Host ('   cmd : ' + $p.CommandLine) }"
-
-if "%FORCE%"=="1" goto dokill
-
-rem Fail closed: only the official package or this checkout, by exact entry point.
-powershell -NoProfile -Command "$p = Get-CimInstance Win32_Process -Filter 'ProcessId=%PID%'; if ($p -and $p.Name -eq 'node.exe' -and $p.CommandLine -match '[\\/](pi-web-gui|@agegr[\\/]pi-web)[\\/]|[\\/]next[\\/]dist[\\/](bin[\\/]next|server[\\/]lib[\\/]start-server)') { exit 0 } else { exit 1 }"
-if errorlevel 1 (
-  echo.
-  echo   [WARN] That process does not look like a Pi Web server.
-  echo          Refusing to stop it.  Override with:  stop-pi-web.cmd %PORT% force
-  echo.
-  pause
   exit /b 1
 )
 
-:dokill
-echo.
-echo   Stopping port %PORT% ... this is a forced kill (taskkill /F):
-echo   the server's running agents are not shut down gracefully.
-taskkill /PID %PID% /T /F >nul 2>&1
-if errorlevel 1 (
-  echo   [ERROR] Could not stop PID %PID%.
-  echo.
-  pause
-  exit /b 1
+rem 启动器可能在等待此次停止，先记录 pending，成功后再改成 stopped。
+set "RUN_ID="
+set "STOP_FILE="
+if exist "%~dp0pi-web-%PORT%.run" set /p "RUN_ID=" <"%~dp0pi-web-%PORT%.run"
+if defined RUN_ID set "STOP_FILE=%~dp0pi-web-%PORT%-%RUN_ID%.stop"
+if defined STOP_FILE >"%STOP_FILE%" echo pending
+
+if "%FORCE%"=="1" (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0stop-pi-web.ps1" -Port %PORT% -Force
+) else (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0stop-pi-web.ps1" -Port %PORT%
 )
-echo   [OK] Pi Web stopped.
-echo.
-ping -n 3 127.0.0.1 >nul
-exit /b 0
+set "RC=%ERRORLEVEL%"
+
+if defined STOP_FILE (
+  if "%RC%"=="0" (
+    >"%STOP_FILE%" echo stopped
+  ) else (
+    >"%STOP_FILE%" echo failed
+  )
+)
+
+exit /b %RC%

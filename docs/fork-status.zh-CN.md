@@ -73,10 +73,10 @@
 
 ### 5. Windows 自用启动器模板
 
-- 提交：`aa9452a`；[scripts/windows/pi-web](../scripts/windows/pi-web/README.md) 中有四个脚本，`.gitattributes` 规定 `.cmd`／`.vbs` 使用 CRLF。
+- 提交：`aa9452a`；[scripts/windows/pi-web](../scripts/windows/pi-web/README.md) 中现在有五个脚本，`.gitattributes` 规定 `.cmd`／`.ps1`／`.vbs` 使用 CRLF。
 - 默认目标是当前 fork 的开发模式，也可选已安装官方包、生产模式、端口、dry-run；通过 VBS 隐藏启动窗口，并提供停止脚本。
 - 属于自用部署工具，有默认本机路径和内存设置。`stop-pi-web.cmd` 使用强制结束进程树，不能描述为优雅退出。
-- 本次核对：仓库模板与 `%LOCALAPPDATA%\pi-web` 中的 `start-pi-web.cmd`、`open-when-ready.cmd`、`stop-pi-web.cmd` 哈希不同；`pi-web-start.vbs` 相同。
+- 本次核对：仓库模板与 `%LOCALAPPDATA%\pi-web` 中的 `start-pi-web.cmd`、`open-when-ready.cmd` 哈希不同；`stop-pi-web.cmd`、`stop-pi-web.ps1`、`pi-web-start.vbs` 相同。
 - 本机启动器会选择 `open-dev.html` 并探测 `/api/web-auth`；仓库模板尚未同步。安装前见 [模板差异说明](../scripts/windows/pi-web/README.md)。
 
 ### 6. 后台完成提示与开发模式推送

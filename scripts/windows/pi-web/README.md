@@ -17,7 +17,7 @@ folder, because cmd is happiest with CRLF batch files.
 
 ## 模板与本机安装版本的差异（2026-10-24）
 
-本目录是可跟踪的模板，不保证与 `%LOCALAPPDATA%\pi-web` 中已安装的文件同步。本次核对，`start-pi-web.cmd`、`open-when-ready.cmd`、`stop-pi-web.cmd` 的哈希不同，VBS 相同。
+本目录是可跟踪的模板，不保证与 `%LOCALAPPDATA%\pi-web` 中已安装的文件同步。本次核对，`start-pi-web.cmd`、`open-when-ready.cmd` 的哈希不同；`stop-pi-web.cmd`、`stop-pi-web.ps1`、VBS 相同。
 
 已安装版本会在 fork 开发模式下打开 `/open-dev.html`，并以 `/api/web-auth` 的成功 HTTP 响应作为就绪条件。此处模板仍打开 `/`；其 `curl` 探测没有 `-f`，无 curl 时还会退回端口监听检测。因此直接用模板覆盖本机文件，会丢失上述启动修复。模板同步前应先比较两份文件。
 
@@ -53,9 +53,14 @@ Behaviour worth knowing:
   (this fork / the installed official package / something else), repeats the shared-data
   warning, opens the browser and exits with code 100 (which the VBS reads as "already
   running").
+- Port discovery reads `Get-NetTCPConnection -LocalPort <port>` and accepts a zero remote
+  port; it does not depend on `netstat` or the reported `State`, both of which can be
+  blank for a working loopback listener on this Windows installation. A stale Pi Web
+  process with no listener is reported with the exact stop command.
 - One log per port (`pi-web-<port>.log`), so a second instance never truncates or locks
   the first one's log. Argument errors before the port is known go to
-  `pi-web-launcher.log`.
+  `pi-web-launcher.log`. Launcher lifecycle messages always go to
+  `pi-web-launcher.log`, so a repeated click never writes into a running server's log.
 - `prod rebuild` needs `NODE_OPTIONS=--max-old-space-size=8192` on this machine; the
   launcher sets it for the build (8 GB is the V8 old-space limit, not total RAM).
 - `open-when-ready.cmd <port>` waits for the server to answer over HTTP (not merely for
@@ -63,11 +68,14 @@ Behaviour worth knowing:
 
 ## `stop-pi-web.cmd [port] [force]`
 
-Resolves the listening PID on the port and kills the tree with `taskkill /F` after
-checking that the command line is one of the expected entry points (this checkout,
-`@agegr/pi-web`, or a Next dev/prod server). Anything else is refused with the exact
-override to use: `stop-pi-web.cmd <port> force`. Forced termination means running agents
-are not shut down gracefully.
+Resolves the port listener and also scans Node processes for this checkout's Pi Web
+server and for the matching `next dev -p <port>` process tree. It therefore still finds
+and stops stale `start-server.js` and Turbopack workers when the listening socket has
+already closed. The helper ends every process in the computed tree, checks that no Pi Web
+Node process remains, and reports failure if cleanup was incomplete. A port held by an
+unrelated process is refused with the exact override:
+`stop-pi-web.cmd <port> force`. Forced termination means running agents are not shut
+down gracefully.
 
 ## Two instances at once
 

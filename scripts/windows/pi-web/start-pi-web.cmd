@@ -29,6 +29,7 @@ set "REBUILD=0"
 set "DRY=0"
 set "RC=0"
 set "LOG="
+set "LAUNCH_LOG="
 set "URL="
 set "MATCHED="
 set "ARG="
@@ -72,6 +73,7 @@ goto args
 if not defined PORT set "PORT=30141"
 rem one log per port, so two instances never truncate or lock each other
 set "LOG=%BASE%pi-web-%PORT%.log"
+set "LAUNCH_LOG=%BASE%pi-web-launcher.log"
 if "%REBUILD%"=="1" set "MODE=prod"
 if not defined MODE set "MODE=dev"
 if "%REBUILD%"=="1" if /i "%TARGET%"=="official" goto badcombo
@@ -90,17 +92,34 @@ if "%DRY%"=="1" (
 
 title Pi Web - %URL%
 
-rem ---- is the port taken? say what holds it, warn, open the browser, stop ----
+rem 这台机器上的 netstat 和 TCP State 可能为空；只按本地端口和远端端口 0 判断监听。
+if not exist "%~dp0stop-pi-web.ps1" goto portchecklegacy
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0stop-pi-web.ps1" -Port %PORT% -ProbeOnly >nul 2>&1
+if errorlevel 2 goto portstale
+if not errorlevel 1 goto portrunning
+goto portfree
+
+:portchecklegacy
 netstat -ano | findstr /R /C:"127\.0\.0\.1:%PORT% .*LISTENING" >nul 2>&1
-if not errorlevel 1 (
-  echo [i] Port %PORT% is already in use - opening %URL%
-  call :log "    you asked for: %TARGET%, mode %MODE%"
-  call :describe %PORT%
-  call :warnshared
-  start "" "%URL%"
-  ping -n 3 127.0.0.1 >nul
-  exit /b 100
-)
+if errorlevel 1 goto portfree
+
+:portrunning
+echo [i] Port %PORT% is already in use - opening %URL%
+call :log "    you asked for: %TARGET%, mode %MODE%"
+call :describe %PORT%
+call :warnshared
+start "" "%URL%"
+ping -n 3 127.0.0.1 >nul
+exit /b 100
+
+:portstale
+echo.
+echo   [ERROR] A stale Pi Web process still owns port %PORT%, but the port is not listening.
+echo           Stop it first:  "%~dp0stop-pi-web.cmd" %PORT%
+echo.
+exit /b 1
+
+:portfree
 
 if /i "%TARGET%"=="official" goto run_official
 if /i "%MODE%"=="prod" goto run_fork_prod
@@ -121,7 +140,7 @@ if exist "%FORK%\.next\dev\lock" call :log "[i] A dev server already runs in thi
 call :initlog "fork dev on port %PORT%"
 call :log "[i] target: fork (dev mode) from %FORK%"
 pushd "%FORK%" || goto failpushd
-start "" /b "%BASE%open-when-ready.cmd" %PORT%
+start "" /b cmd.exe /d /c call "%BASE%open-when-ready.cmd" %PORT%
 if "%QUIET%"=="1" (
   node "node_modules\next\dist\bin\next" dev -H 127.0.0.1 -p %PORT% >> "%LOG%" 2>&1
 ) else (
@@ -241,20 +260,19 @@ exit /b 0
 
 :log
 echo %~1
-if "%QUIET%"=="1" echo [%DATE% %TIME%] %~1 >> "%LOG%" 2>nul
+if "%QUIET%"=="1" echo [%DATE% %TIME%] %~1 >> "%LAUNCH_LOG%" 2>nul
 exit /b 0
 
 :err
-if not defined LOG set "LOG=%BASE%pi-web-launcher.log"
 echo %~1
-echo [%DATE% %TIME%] %~1 >> "%LOG%" 2>nul
+echo [%DATE% %TIME%] %~1 >> "%LAUNCH_LOG%" 2>nul
 exit /b 0
 
 :describe
 rem Say what holds the port: this fork, the installed official package, or something else.
 set "PID="
 set "KIND=another program"
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:"127\.0\.0\.1:%~1 .*LISTENING"') do set "PID=%%P"
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort %~1 -ErrorAction SilentlyContinue | Where-Object { $_.RemotePort -eq 0 } | Select-Object -First 1 -ExpandProperty OwningProcess" 2^>nul`) do set "PID=%%P"
 if not defined PID exit /b 0
 for /f "usebackq delims=" %%C in (`powershell -NoProfile -Command "$p = Get-CimInstance Win32_Process -Filter 'ProcessId=%PID%'; if ($p) { if ($p.CommandLine -match 'pi-web-gui') { 'this fork' } elseif ($p.CommandLine -match '@agegr') { 'the installed official package' } else { 'another program' } }" 2^>nul`) do set "KIND=%%C"
 call :log "    PID %PID%: %KIND%"
