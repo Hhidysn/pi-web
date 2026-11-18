@@ -39,7 +39,7 @@ set "KIND="
 set "BUILD_RC="
 set "FORK=%PI_WEB_FORK%"
 if not defined FORK set "FORK=F:\documents\software\pi-web-gui"
-set "HEAP=8192"
+set "HEAP=14336"
 
 set "BASE=%~dp0"
 
