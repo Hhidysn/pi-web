@@ -535,6 +535,6 @@ test("every way of opening a session reveals its row through one effect keyed on
   assert.doesNotMatch(fork, /setTreeReveal/);
   assert.doesNotMatch(fork, /saveGroupChoices/);
   assert.match(fork, /openRevealFocusRef\.current = \{\s+sessionId: forked\.id,/);
-  // Only the open session's effect and a moved group ask the main tree for a row.
-  assert.equal(source.match(/\bsetTreeReveal\(\{/g)?.length, 2);
+  // 打开会话、移动分组和恢复隐藏项目都会定位到树中的对应行。
+  assert.equal(source.match(/\bsetTreeReveal\(\{/g)?.length, 3);
 });

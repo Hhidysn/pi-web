@@ -1,6 +1,6 @@
 /**
  * Per-browser sidebar preferences: the active tab (sessions or files), the
- * user's explicit project group expand/collapse choices, the archive view's
+ * user's explicit project group expand/collapse choices, hidden projects, the archive view's
  * folded projects, whether the pinned section is collapsed, whether the files section below the sessions is
  * collapsed, whether the files tab or section lists ignored files, whether the
  * Git changes panel shows a flat list or a folder tree, and the folders the
@@ -19,6 +19,7 @@ const GROUP_EXPANSION_STORAGE_KEY = "pi-web:sidebar-groups-v2";
  */
 const LEGACY_GROUP_EXPANSION_STORAGE_KEY = "pi-web:sidebar-groups";
 const ARCHIVE_COLLAPSED_STORAGE_KEY = "pi-web:sidebar-archive-collapsed";
+const HIDDEN_PROJECTS_STORAGE_KEY = "pi-web:hidden-project-keys";
 const PINNED_COLLAPSED_STORAGE_KEY = "pi-web:sidebar-pins-collapsed";
 const SHOW_IGNORED_FILES_STORAGE_KEY = "pi-web:sidebar-files-show-ignored";
 const FILES_COLLAPSED_STORAGE_KEY = "pi-web:sidebar-files-collapsed";
@@ -171,6 +172,28 @@ export function loadPinnedCollapsed(storage: StorageLike | null = getBrowserStor
     return storage.getItem(PINNED_COLLAPSED_STORAGE_KEY) === "true";
   } catch {
     return false;
+  }
+}
+
+/** A view preference only: hiding never archives or deletes sessions. */
+export function loadHiddenProjectKeys(storage: StorageLike | null = getBrowserStorage()): string[] {
+  if (!storage) return [];
+  try {
+    const value: unknown = JSON.parse(storage.getItem(HIDDEN_PROJECTS_STORAGE_KEY) ?? "[]");
+    return Array.isArray(value)
+      ? [...new Set(value.filter((key): key is string => typeof key === "string" && key.length > 0))]
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveHiddenProjectKeys(keys: readonly string[], storage: StorageLike | null = getBrowserStorage()): void {
+  if (!storage) return;
+  try {
+    storage.setItem(HIDDEN_PROJECTS_STORAGE_KEY, JSON.stringify([...new Set(keys)]));
+  } catch {
+    // Persistence is best-effort.
   }
 }
 

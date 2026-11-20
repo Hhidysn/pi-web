@@ -56,6 +56,8 @@ const defaults = {
   onGroupNew: noop,
   onGroupMenu: noop,
   onPinEmptyGroup: noop,
+  onHideProject: noop,
+  onOpenHiddenProjects: noop,
   onOpenOtherProject: noop,
   onOpenArchive: noop,
 };
@@ -110,6 +112,15 @@ function groupRow(extra = {}, projectExtra = {}) {
 }
 
 const footer = [{ kind: "footer-open", key: "footer-open" }];
+
+test("project hide and restore controls have accessible labels on desktop and mobile", () => {
+  for (const layout of ["desktop", "mobile"]) {
+    const html = render({ layout, rows: [groupRow(), { kind: "footer-hidden", key: "footer-hidden", count: 1 }] });
+    assert.match(rowMarkup(html, `group:${project.key}`), /aria-label="Hide app from sidebar \(keeps conversations\)"/);
+    assert.match(rowMarkup(html, "footer-hidden"), /<button[^>]*class="session-tree-footer-button"/);
+    assert.match(html, /Hidden projects · 1/);
+  }
+});
 
 test("the pinned header toggles the section and shows activity dots only while collapsed", () => {
   const collapsed = rowMarkup(render({
@@ -584,9 +595,9 @@ test("headers lead with their chevron, and every row's text starts in one column
   // One rhythm: session rows, every header (a project's, the pinned
   // section's, the archive's projects), the empty note and the footer are
   // one height, 28px (44px on a phone); only "show more" is shorter.
-  assert.deepEqual(SIDEBAR_ROW_HEIGHTS.desktop, { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "archive-group": 28 });
+  assert.deepEqual(SIDEBAR_ROW_HEIGHTS.desktop, { "pinned-header": 28, session: 28, "pinned-more": 26, group: 28, "group-more": 26, "group-empty": 28, spacer: 8, "footer-open": 28, "footer-archived": 28, "footer-hidden": 28, "archive-group": 28 });
   for (const [layout, height] of [["desktop", 28], ["mobile", 44]]) {
-    for (const kind of ["session", "group", "pinned-header", "group-empty", "footer-open", "footer-archived", "archive-group"]) {
+    for (const kind of ["session", "group", "pinned-header", "group-empty", "footer-open", "footer-archived", "footer-hidden", "archive-group"]) {
       assert.equal(SIDEBAR_ROW_HEIGHTS[layout][kind], height, `${layout} ${kind}`);
     }
   }
