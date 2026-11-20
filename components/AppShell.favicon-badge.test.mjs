@@ -22,7 +22,6 @@ function runHandleAgentEnd({ end, selectedSession, attention }) {
     useCallback: (callback) => callback,
     setRefreshKey: () => {},
     setExplorerRefreshKey: () => {},
-    selectedSession,
     isHiddenRelation,
     shouldShowBrowserNotification: () => attention,
     deliverSessionNotification: (notice) => notifications.push(notice),
@@ -36,7 +35,7 @@ function runHandleAgentEnd({ end, selectedSession, attention }) {
     stripTypeScriptTypes(`${callbackBody("handleAgentEnd", "\n  // The badge is for an unseen tab")}\nglobalThis.handleAgentEnd = handleAgentEnd;`),
     context,
   );
-  context.handleAgentEnd(end);
+  context.handleAgentEnd(end, selectedSession);
   return { notifications, hiddenFinishedSessionIds: context.hiddenFinishedSessionIds };
 }
 

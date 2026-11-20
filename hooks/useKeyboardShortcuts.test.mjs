@@ -91,3 +91,16 @@ test("a KeyboardEvent without a code still matches by key", () => {
   assert.equal(shortcut({ key: "n", code: "" }), true);
   assert.equal(shortcut({ key: "Dead", code: "" }), false);
 });
+
+test("Escape only reaches the visible conversation's handler", (t) => {
+  const stopped = [];
+  registerAbortHandler(() => stopped.push("alpha"), "alpha");
+  registerAbortHandler(() => stopped.push("beta"), "beta");
+  t.after(() => {
+    registerAbortHandler(null, "alpha");
+    registerAbortHandler(null, "beta");
+  });
+  assert.equal(handleGlobalEscape(keydown("Escape"), "composer"), false);
+  assert.equal(handleGlobalEscape(keydown("Escape"), "beta"), true);
+  assert.deepEqual(stopped, ["beta"]);
+});

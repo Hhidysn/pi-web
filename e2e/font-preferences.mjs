@@ -19,33 +19,33 @@ export async function checkFontPreferences(page) {
   assert.equal(await mono.inputValue(), "");
   assert.equal(await uiWeight.inputValue(), "400");
   assert.equal(await monoWeight.inputValue(), "400");
-  assert.equal(await weight(".markdown-user-message"), "400", "Regular, not Light, is the default");
-  assert.equal(await weight(".markdown-code-block code"), "400");
+  assert.equal(await weight('[data-session-pane-active="true"] .markdown-user-message'), "400", "Regular, not Light, is the default");
+  assert.equal(await weight('[data-session-pane-active="true"] .markdown-code-block code'), "400");
   await uiWeight.fill("500");
   await monoWeight.fill("600");
-  for (const selector of ["body", ".chat-input-textarea", ".markdown-user-message", "#settings-font-ui"]) {
+  for (const selector of ["body", '[data-session-pane-active="true"] .chat-input-textarea', '[data-session-pane-active="true"] .markdown-user-message', "#settings-font-ui"]) {
     assert.equal(await weight(selector), "500", selector);
   }
-  for (const selector of [".markdown-code-block pre", ".markdown-code-block code", "#settings-font-mono"]) {
+  for (const selector of ['[data-session-pane-active="true"] .markdown-code-block pre', '[data-session-pane-active="true"] .markdown-code-block code', "#settings-font-mono"]) {
     assert.equal(await weight(selector), "600", selector);
   }
-  assert.equal(await weight(".markdown-user-message strong"), "700", "Markdown emphasis keeps its weight");
-  assert.equal(await weight(".markdown-body h2"), "600", "Headings keep their weight");
+  assert.equal(await weight('[data-session-pane-active="true"] .markdown-user-message strong'), "700", "Markdown emphasis keeps its weight");
+  assert.equal(await weight('[data-session-pane-active="true"] .markdown-body h2'), "600", "Headings keep their weight");
   await ui.pressSequentially("Times New Roman, serif");
   assert.equal(await ui.inputValue(), "Times New Roman, serif", "Typing spaces must not join font names");
   await mono.fill("monospace");
-  for (const selector of ["body", ".chat-input-textarea", ".markdown-user-message", "#settings-font-ui"]) {
+  for (const selector of ["body", '[data-session-pane-active="true"] .chat-input-textarea', '[data-session-pane-active="true"] .markdown-user-message', "#settings-font-ui"]) {
     assert.match(await font(selector), /^"?Times New Roman"?, serif,/, selector);
   }
-  for (const selector of [".markdown-code-block code", "#settings-font-mono"]) {
+  for (const selector of ['[data-session-pane-active="true"] .markdown-code-block code', "#settings-font-mono"]) {
     assert.match(await font(selector), /^monospace,/, selector);
   }
   await page.reload({ waitUntil: "networkidle" });
-  await page.locator(".markdown-code-block code").waitFor();
+  await page.locator('[data-session-pane-active="true"] .markdown-code-block code').waitFor();
   assert.match(await font("body"), /^"?Times New Roman"?, serif,/);
-  assert.match(await font(".markdown-code-block code"), /^monospace,/);
-  assert.equal(await weight(".markdown-user-message"), "500");
-  assert.equal(await weight(".markdown-code-block code"), "600");
+  assert.match(await font('[data-session-pane-active="true"] .markdown-code-block code'), /^monospace,/);
+  assert.equal(await weight('[data-session-pane-active="true"] .markdown-user-message'), "500");
+  assert.equal(await weight('[data-session-pane-active="true"] .markdown-code-block code'), "600");
   await openSettings();
   assert.equal(await ui.inputValue(), "Times New Roman, serif");
   assert.equal(await mono.inputValue(), "monospace");
@@ -80,14 +80,14 @@ export async function checkFontPreferences(page) {
 
   // Changing font metrics must refit a draft without requiring another keystroke.
   await page.keyboard.press("Escape");
-  const textarea = page.locator(".chat-input-textarea");
+  const textarea = page.locator('[data-session-pane-active="true"] .chat-input-textarea');
   await textarea.fill("iiii llll mmmm wwww sample text ".repeat(12));
   await openSettings();
   await ui.fill("serif");
   const serifHeight = await textarea.evaluate((el) => el.clientHeight);
   await ui.fill("monospace");
   await page.waitForFunction((oldHeight) => {
-    const input = document.querySelector(".chat-input-textarea");
+    const input = document.querySelector('[data-session-pane-active="true"] .chat-input-textarea');
     return input.clientHeight !== oldHeight && (input.scrollHeight <= input.clientHeight + 1 || input.clientHeight >= 199);
   }, serifHeight);
   await resetUi.click();

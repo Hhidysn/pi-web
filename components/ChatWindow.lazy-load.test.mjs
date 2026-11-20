@@ -23,10 +23,11 @@ const forgetCursor = compile(hook("useEffect", "requestedCursorRef.current = nul
 
 // Mounts the observer effect with the given history state; `reachTop()` is the
 // sentinel coming into view, `render(cursor)` the next cursor rendering.
-function mount({ hasEarlierMessages, landed = true }) {
+function mount({ hasEarlierMessages, landed = true, paneVisible = true }) {
   const calls = { visibleCount: 50, loads: [] };
   let observed = null;
   const context = createContext({
+    paneVisible,
     sentinel: {}, scrollContainerRef: { current: { scrollHeight: 4000, scrollTop: 0 } },
     loadingOlderRef: { current: false }, prevScrollDistanceRef: { current: null }, requestedCursorRef: { current: null },
     hasEarlierMessages, historyCursor: "older", session: { id: "a" }, sessionIdRef: { current: "a" }, activeLeafId: "leaf",
@@ -42,7 +43,7 @@ function mount({ hasEarlierMessages, landed = true }) {
     calls,
     context,
     reachTop: async () => {
-      observed([{ isIntersecting: true }]);
+      observed?.([{ isIntersecting: true }]);
       await new Promise((resolve) => setImmediate(resolve));
     },
     render: (cursor) => {
@@ -93,4 +94,10 @@ test("a page that did not land, or a cursor a reload brought back, is fetched ag
   reloaded.render("older");
   await reloaded.reachTop();
   assert.deepEqual(cursors(reloaded.calls), ["older", "older"]);
+});
+
+test("a hidden conversation does not page earlier history", async () => {
+  assert.deepEqual(await reachTop({ hasEarlierMessages: true, paneVisible: false }), {
+    visibleCount: 50, loads: [], scrollDistance: null,
+  });
 });

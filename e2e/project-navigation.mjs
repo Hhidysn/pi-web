@@ -73,7 +73,7 @@ export async function checkProjectNavigation({ browser, base, artifacts, fixture
       });
       const page = await context.newPage();
       page.setDefaultTimeout(30_000);
-      const input = page.locator("textarea.chat-input-textarea");
+      const input = page.locator("textarea.chat-input-textarea:visible");
       const group = (key) => page.locator(`[data-row-key=${JSON.stringify(`group:${key}`)}]`);
       const selected = (target) => target.locator("#session-sidebar-panel-sessions .session-tree-main[aria-current='true']");
       const showSessions = async () => {
@@ -114,7 +114,7 @@ export async function checkProjectNavigation({ browser, base, artifacts, fixture
         assert.deepEqual([...url.searchParams.entries()], [["cwd", cwd]]);
         assert.equal(url.hash, "");
         assert.equal(await selected(tab).count(), 0, "no remembered session selected");
-        assert.equal(await tab.locator("textarea.chat-input-textarea").inputValue(), "");
+        assert.equal(await tab.locator("textarea.chat-input-textarea:visible").inputValue(), "");
         assert.equal(await tab.evaluate(() => window.opener), null);
       };
       try {

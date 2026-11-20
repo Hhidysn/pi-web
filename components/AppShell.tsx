@@ -1,10 +1,15 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, type ComponentProps, type RefObject } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar, type SelectSessionOptions, type SessionSidebarControl } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
+import { SessionTabBar, type SessionTabItem } from "./SessionTabBar";
+import {
+  addOpenSessionTab, loadOpenSessionTabs, moveOpenSessionTab, nextActiveTabAfterClose,
+  readMaxOpenSessionTabs, removeOpenSessionTab, saveOpenSessionTabs,
+} from "@/lib/session-tabs";
 import { NewSessionContextBar, type NewSessionContextControl } from "./NewSessionContextBar";
 import type { ChatScrollPosition } from "@/lib/chat-scroll-position";
 import { FileViewer } from "./FileViewer";
@@ -86,6 +91,16 @@ import { focusIfLost } from "@/lib/stacked-dialog";
 import { loadAgentStripLocked, saveAgentStripLocked } from "@/lib/agent-strip-lock";
 import { claimDoneChime } from "@/lib/done-chime";
 
+type PaneReports = Pick<ComponentProps<typeof ChatWindow>,
+  "onBranchDataChange" | "onSystemPromptChange" | "onSystemToolsChange" | "onSystemInfoLoaderChange"
+  | "onDebugSnapshotReaderChange" | "onSessionStatsChange" | "onContextUsageChange">;
+
+interface PaneBinding {
+  input: RefObject<ChatInputHandle | null>;
+  handlers: PaneReports;
+  reports: Map<keyof PaneReports, () => void>;
+}
+
 type SessionCopyField = "file" | "id" | "projectDir" | "gitBranch" | "gitWorktree";
 type AutoNameStatus =
   | { kind: "idle" }
@@ -165,9 +180,36 @@ export function AppShell() {
   selectedSessionRef.current = selectedSession;
   const [sessionCatalog, setSessionCatalog] = useState<SessionInfo[]>([]);
   const [catalogLoaded, setCatalogLoaded] = useState(false);
+  const [openTabIds, setOpenTabIds] = useState<string[]>([]);
+  const [tabsLoaded, setTabsLoaded] = useState(false);
+  const visibleSessionId = selectedSession?.id;
+  const [pendingTabSessions, setPendingTabSessions] = useState<Record<string, SessionInfo>>({});
+  const [sessionPaneKeys, setSessionPaneKeys] = useState<Record<string, string>>({});
+  const [unreadSessionIds, setUnreadSessionIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    setOpenTabIds(loadOpenSessionTabs());
+    setTabsLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!tabsLoaded || !visibleSessionId) return;
+    setOpenTabIds((ids) => ids.includes(visibleSessionId)
+      ? ids
+      : addOpenSessionTab(ids, visibleSessionId, readMaxOpenSessionTabs()).tabs);
+  }, [tabsLoaded, visibleSessionId]);
+
+  useEffect(() => {
+    if (tabsLoaded) saveOpenSessionTabs(openTabIds);
+  }, [openTabIds, tabsLoaded]);
   const handleSessionsChange = useCallback((sessions: SessionInfo[]) => {
     setSessionCatalog(sessions);
     setCatalogLoaded(true);
+    setPendingTabSessions((current) => {
+      const listed = new Set(sessions.map(({ id }) => id));
+      const pending = Object.entries(current).filter(([id]) => !listed.has(id));
+      return pending.length === Object.keys(current).length ? current : Object.fromEntries(pending);
+    });
     // The sidebar hydrates metadata after the selected session has already
     // mounted. Merge that update into the active session without changing the
     // ChatWindow key or restarting its history load.
@@ -344,7 +386,13 @@ export function AppShell() {
     reclampSidebarWidth();
     reclampRightPanelWidth();
   }, [reclampRightPanelWidth, reclampSidebarWidth, rightPanelOpen]);
-  const chatInputRef = useRef<ChatInputHandle | null>(null);
+  const activePaneKeyRef = useRef<string | null>(null);
+  const previousPaneKeyRef = useRef<string | null>(null);
+  const paneBindings = useRef(new Map<string, PaneBinding>());
+  const getActiveChatInput = useCallback(() => {
+    const key = activePaneKeyRef.current;
+    return key ? paneBindings.current.get(key)?.input.current : null;
+  }, []);
   // `/side <prompt>`: the text that seeds the side chat's composer, until its panel consumes it.
   const [sideChatPrompts, setSideChatPrompts] = useState<Record<string, string>>({});
   const topBarRef = useRef<HTMLDivElement>(null);
@@ -711,20 +759,20 @@ export function AppShell() {
   // Same @mention format as the chat input's @ autocomplete, so the agent's
   // read tool resolves it the same way (it strips the @ prefix).
   const handleAtMention = useCallback((relativePath: string, isDir: boolean) => {
-    chatInputRef.current?.insertText(buildAtMentionText(relativePath, isDir));
+    getActiveChatInput()?.insertText(buildAtMentionText(relativePath, isDir));
     if (isMobile) { setRightPanelOpen(false); setSidebarOpen(false); }
-  }, [isMobile]);
+  }, [getActiveChatInput, isMobile]);
 
   const handleAtMentions = useCallback((relativePaths: string[]) => {
     const mentions = buildFileAtMentionsText(relativePaths);
-    if (mentions) chatInputRef.current?.insertText(mentions);
+    if (mentions) getActiveChatInput()?.insertText(mentions);
     if (isMobile) { setRightPanelOpen(false); setSidebarOpen(false); }
-  }, [isMobile]);
+  }, [getActiveChatInput, isMobile]);
 
   const handleFileLineMention = useCallback((relativePath: string, startLine: number, endLine: number) => {
-    chatInputRef.current?.insertText(buildFileLineMentionText(relativePath, startLine, endLine));
+    getActiveChatInput()?.insertText(buildFileLineMentionText(relativePath, startLine, endLine));
     if (isMobile) { setRightPanelOpen(false); setSidebarOpen(false); }
-  }, [isMobile]);
+  }, [getActiveChatInput, isMobile]);
 
   const initialSessionId = initialNavigation.sessionId;
   const initialLinkedSessionId = linkedSessionId(initialNavigation);
@@ -1030,7 +1078,7 @@ export function AppShell() {
     const activeDraftKey = activeNewSessionDraftKeyRef.current;
     const activeDraftCwd = newSessionCwd ?? (selectedSession === null ? activeCwd : null);
     if (options?.carryComposer && selectedSession === null && activeDraftKey) {
-      const input = chatInputRef.current;
+      const input = getActiveChatInput();
       if (input) input.rekeyDraft(activeDraftKey, draftKey);
       else rekeyDraft(activeDraftKey, draftKey);
       setCarriedNewSessionChoices(newSessionChoicesRef.current);
@@ -1069,15 +1117,16 @@ export function AppShell() {
     if (!isMobile && !newSessionBarFocusRef.current) {
       requestAnimationFrame(() => {
         if (document.activeElement?.closest("[aria-modal='true']")) return;
-        chatInputRef.current?.focus();
+        getActiveChatInput()?.focus();
       });
     }
-  }, [activeCwd, changeFileWorkspace, invalidateWorkspaceRestore, isMobile, newSessionCwd, router, selectedSession]);
+  }, [activeCwd, changeFileWorkspace, getActiveChatInput, invalidateWorkspaceRestore, isMobile, newSessionCwd, router, selectedSession]);
 
   // Global keyboard shortcuts (handles Esc, Ctrl+Alt+N etc.)
   useGlobalKeyboardShortcuts({
     onNewSession: (cwd: string) => handleNewSession(`kb-${Date.now()}`, cwd),
     activeCwd,
+    abortOwner: selectedSession?.id ?? "composer",
   });
 
   // Client-built transient SessionInfo (new session / fork) lacks the
@@ -1106,10 +1155,12 @@ export function AppShell() {
     invalidateWorkspaceRestore();
     activeNewSessionDraftKeyRef.current = null;
     setNewSessionCwd(null);
+    setPendingTabSessions((tabs) => ({ ...tabs, [session.id]: session }));
+    setSessionPaneKeys((keys) => ({ ...keys, [session.id]: "composer:" + sessionKey }));
     setSelectedSession(session);
     hydrateSelectedSession(session.id);
     router.replace(`?session=${encodeURIComponent(session.id)}`, { scroll: false });
-  }, [invalidateWorkspaceRestore, router, hydrateSelectedSession]);
+  }, [invalidateWorkspaceRestore, router, hydrateSelectedSession, sessionKey]);
 
   const deliverSessionNotification = useCallback(({
     targetSession,
@@ -1151,15 +1202,14 @@ export function AppShell() {
     }
   }, [handleSelectSession, locale]);
 
-  const handleAgentEnd = useCallback((end: AgentEndInfo) => {
+  const handleAgentEnd = useCallback((end: AgentEndInfo, targetSession: SessionInfo | null) => {
     // The sidebar's reload merges the selected session's new row into it
     // (handleSessionsChange), so no list fetch of its own here.
     setRefreshKey((k) => k + 1);
     setExplorerRefreshKey((k) => k + 1);
 
-    if (end.aborted || end.subagentsActive || isHiddenRelation(selectedSession?.relation)) return;
+    if (end.aborted || end.subagentsActive || isHiddenRelation(targetSession?.relation)) return;
     if (!shouldShowBrowserNotification()) return;
-    const targetSession = selectedSession;
     if (targetSession) {
       setHiddenFinishedSessionIds((prev) => {
         if (prev.has(targetSession.id)) return prev;
@@ -1174,7 +1224,7 @@ export function AppShell() {
       body: translate("i18n.taskFinished"),
       tag: targetSession ? `pi-session-complete:${targetSession.id}` : "pi-session-complete",
     });
-  }, [deliverSessionNotification, selectedSession, translate]);
+  }, [deliverSessionNotification, translate]);
 
   // The badge is for an unseen tab: opening it puts the finished chat on screen.
   useEffect(() => {
@@ -1191,20 +1241,20 @@ export function AppShell() {
     };
   }, []);
 
-  const handleAttentionNeeded = useCallback((request: BlockingExtensionUiRequest) => {
-    if (isHiddenRelation(selectedSession?.relation)) return;
+  const handleAttentionNeeded = useCallback((request: BlockingExtensionUiRequest, targetSession: SessionInfo | null) => {
+    if (isHiddenRelation(targetSession?.relation)) return;
     if (!shouldShowBrowserNotification()) return;
     if (!claimExtensionAttentionNotification(request, notifiedAttentionRequestIdsRef.current)) return;
 
     deliverSessionNotification({
-      targetSession: selectedSession,
+      targetSession,
       title: translate("i18n.attentionNeeded"),
       body: request.method === "custom"
         ? translate("i18n.extensionInputNeeded")
         : request.title,
       tag: `pi-extension-ui:${request.id}`,
     });
-  }, [deliverSessionNotification, selectedSession, translate]);
+  }, [deliverSessionNotification, translate]);
 
   const handleAutoName = useCallback(async () => {
     const sessionId = selectedSession?.id;
@@ -1260,7 +1310,14 @@ export function AppShell() {
     if (toolEndRefreshTimerRef.current) clearTimeout(toolEndRefreshTimerRef.current);
   }, []);
 
-  const handleSessionForked = useCallback((newSessionId: string, session?: SessionInfo) => {
+  const handleSessionForked = useCallback((newSessionId: string, session?: SessionInfo, source?: SessionInfo | null) => {
+    if (source && selectedSessionRef.current?.id !== source.id) {
+      const forked = session ?? { ...source, id: newSessionId, transient: false };
+      setPendingTabSessions((tabs) => ({ ...tabs, [newSessionId]: forked }));
+      setOpenTabIds((ids) => addOpenSessionTab(ids, newSessionId, readMaxOpenSessionTabs()).tabs);
+      setRefreshKey((k) => k + 1);
+      return;
+    }
     if (session) {
       // A fork into another folder is another project's session: opened as a
       // pick from the list, so the shell adopts its project before the sidebar
@@ -1290,6 +1347,13 @@ export function AppShell() {
   }, [initialLinkedSessionId]);
 
   const handleSessionDeleted = useCallback((sessionId: string) => {
+    setOpenTabIds((ids) => removeOpenSessionTab(ids, sessionId));
+    setPendingTabSessions((tabs) => {
+      if (!Object.hasOwn(tabs, sessionId)) return tabs;
+      const next = { ...tabs };
+      delete next[sessionId];
+      return next;
+    });
     invalidateWorkspaceRestore();
     setRefreshKey((k) => k + 1);
     // The DELETE can outlive a session switch: this callback's captured
@@ -1357,6 +1421,9 @@ export function AppShell() {
 
   // Subagent work opens in a right-panel tab instead of hijacking the main chat.
   const handleOpenSubagentTab = useCallback((sessionId: string, label: string, side?: boolean) => {
+    if (selectedSessionRef.current?.id !== sessionId) {
+      setOpenTabIds((ids) => removeOpenSessionTab(ids, sessionId));
+    }
     setAgentTabs((prev) => prev.some((tab) => tab.sessionId === sessionId)
       ? prev
       : [...prev, { sessionId, label, ...(side ? { side: true } : {}) }]);
@@ -1487,6 +1554,7 @@ export function AppShell() {
     const result = await deleteSideChat(sessionId);
     if (result) return result.error;
     clearDraft(sessionId);
+    setOpenTabIds((ids) => removeOpenSessionTab(ids, sessionId));
     handleCloseFileTab(`agent:${sessionId}`);
     if (selectedSessionRef.current?.id === sessionId) {
       handleSelectSession(root);
@@ -1570,6 +1638,118 @@ export function AppShell() {
     />
   ) : null;
   const showChat = selectedSession !== null || effectiveNewSessionCwd !== null;
+  const knownTabSessions = useMemo(() => new Map([
+    ...Object.values(pendingTabSessions).map((session) => [session.id, session] as const),
+    ...sessionsWithSelection.map((session) => [session.id, session] as const),
+  ]), [pendingTabSessions, sessionsWithSelection]);
+  const rightChatIds = useMemo(() => new Set(agentTabs.map(({ sessionId }) => sessionId)), [agentTabs]);
+
+  useEffect(() => {
+    if (!tabsLoaded || !catalogLoaded) return;
+    setOpenTabIds((ids) => {
+      const next = ids.filter((id) => id === visibleSessionId || (knownTabSessions.has(id) && !rightChatIds.has(id)));
+      return next.length === ids.length ? ids : next;
+    });
+  }, [catalogLoaded, knownTabSessions, rightChatIds, tabsLoaded, visibleSessionId]);
+
+  const tabIds = visibleSessionId && !openTabIds.includes(visibleSessionId)
+    ? [...openTabIds, visibleSessionId] : openTabIds;
+  const openTabSessions = tabIds.flatMap((id) => {
+    const session = knownTabSessions.get(id);
+    return session && (id === visibleSessionId || !rightChatIds.has(id)) ? [session] : [];
+  });
+  const sessionTabItems: SessionTabItem[] = openTabSessions.map((session) => ({
+    id: session.id,
+    label: session.name?.trim() || session.firstMessage?.trim() || session.id,
+    status: runningSessionIds.has(session.id) ? "running" : unreadSessionIds.has(session.id) ? "done" : "idle",
+  }));
+
+  const selectSessionTab = (id: string) => {
+    const session = knownTabSessions.get(id);
+    if (session) handleSelectSession(session);
+  };
+  const closeSessionTab = useCallback((id: string) => {
+    setOpenTabIds((ids) => removeOpenSessionTab(ids, id));
+    if (id !== visibleSessionId) return;
+    const nextId = nextActiveTabAfterClose(openTabSessions.map((session) => session.id), id, id);
+    const next = nextId ? knownTabSessions.get(nextId) : undefined;
+    if (next) handleSelectSession(next);
+    else if (selectedSession) handleNewSession("tab-" + Date.now(), selectedSession.cwd, workspaceKeyOf(selectedSession));
+  }, [handleNewSession, handleSelectSession, knownTabSessions, openTabSessions, selectedSession, visibleSessionId]);
+  const reloadPaneCount = useRef(0);
+  const reloadActiveChat = useCallback(() => {
+    const id = selectedSessionRef.current?.id;
+    if (id) {
+      const key = "reload:" + ++reloadPaneCount.current;
+      setSessionPaneKeys((keys) => ({ ...keys, [id]: key }));
+    } else {
+      setSessionKey((key) => key + 1);
+    }
+  }, []);
+
+  const panes: { key: string; session: SessionInfo | null; active: boolean }[] = openTabSessions.map((session) => ({
+    key: sessionPaneKeys[session.id] ?? "session:" + session.id,
+    session,
+    active: session.id === visibleSessionId,
+  }));
+  if (showChat && !selectedSession) panes.push({ key: "composer:" + sessionKey, session: null, active: true });
+  const activePaneKey = panes.find(({ active }) => active)?.key ?? null;
+  if (activePaneKeyRef.current !== activePaneKey) {
+    previousPaneKeyRef.current = activePaneKeyRef.current;
+    activePaneKeyRef.current = activePaneKey;
+  }
+
+  const bindPane = (key: string): PaneBinding => {
+    const existing = paneBindings.current.get(key);
+    if (existing) return existing;
+    const reports = new Map<keyof PaneReports, () => void>();
+    const bind = <Args extends unknown[]>(field: keyof PaneReports, publish: (...args: Args) => void) =>
+      (...args: Args) => {
+        const replay = () => publish(...args);
+        reports.set(field, replay);
+        if (activePaneKeyRef.current === key) replay();
+      };
+    const binding: PaneBinding = {
+      input: { current: null },
+      reports,
+      handlers: {
+        onBranchDataChange: bind("onBranchDataChange", handleBranchDataChange),
+        onSystemPromptChange: bind("onSystemPromptChange", handleSystemPromptChange),
+        onSystemToolsChange: bind("onSystemToolsChange", handleSystemToolsChange),
+        onSystemInfoLoaderChange: bind("onSystemInfoLoaderChange", handleSystemInfoLoaderChange),
+        onDebugSnapshotReaderChange: bind("onDebugSnapshotReaderChange", handleDebugSnapshotReaderChange),
+        onSessionStatsChange: bind("onSessionStatsChange", handleSessionStatsChange),
+        onContextUsageChange: bind("onContextUsageChange", handleContextUsageChange),
+      },
+    };
+    paneBindings.current.set(key, binding);
+    return binding;
+  };
+
+  useLayoutEffect(() => {
+    // 顶部面板只读取当前标签。后台报告保存在对应会话，切回来时再应用。
+    setBranchTree([]);
+    setBranchActiveLeafId(null);
+    setBranchSwitchLocked(false);
+    branchLeafChangeFnRef.current = null;
+    handleSystemPromptChange(null);
+    handleSystemToolsChange(null);
+    handleSystemInfoLoaderChange(null);
+    handleDebugSnapshotReaderChange(null);
+    handleSessionStatsChange(null);
+    handleContextUsageChange(null);
+    if (activePaneKey) paneBindings.current.get(activePaneKey)?.reports.forEach((replay) => replay());
+  }, [
+    activePaneKey, handleContextUsageChange, handleDebugSnapshotReaderChange, handleSessionStatsChange,
+    handleSystemInfoLoaderChange, handleSystemPromptChange, handleSystemToolsChange,
+  ]);
+
+  useEffect(() => {
+    const keys = new Set(panes.map(({ key }) => key));
+    for (const key of paneBindings.current.keys()) {
+      if (!keys.has(key)) paneBindings.current.delete(key);
+    }
+  });
   const projectTrustCwd = selectedSession?.cwd ?? effectiveNewSessionCwd;
   // While restoring initial session from URL, don't show the placeholder
   const showPlaceholder = initialSessionRestored && !showChat;
@@ -1622,13 +1802,13 @@ export function AppShell() {
       setProjectTrust(data);
       setProjectTrustDialogOpen(false);
       setModelsRefreshKey((key) => key + 1);
-      setSessionKey((key) => key + 1);
+      reloadActiveChat();
     } catch (error) {
       setProjectTrustError({ error: error instanceof Error ? error.message : String(error) });
     } finally {
       setProjectTrustBusy(false);
     }
-  }, [projectTrustBusy, projectTrustCwd]);
+  }, [projectTrustBusy, projectTrustCwd, reloadActiveChat]);
 
   // The restricted-mode banner and Settings › MCP's trust notice open the same dialog.
   const openProjectTrustDialog = useCallback(() => {
@@ -1645,7 +1825,7 @@ export function AppShell() {
 
   const activeFileTab = fileTabs.find((tab) => tab.id === activeFileTabId) ?? null;
   // Subagent work tabs: like files, only the active one is mounted.
-  const activeAgentTab = agentTabs.find((tab) => `agent:${tab.sessionId}` === activeFileTabId) ?? null;
+  const activeAgentTab = agentTabs.find((tab) => tab.sessionId !== selectedSessionId && `agent:${tab.sessionId}` === activeFileTabId) ?? null;
   const activeCwdName = activeCwd ? getFileName(activeCwd) || activeCwd : null;
   const windowTitle = activeCwdName ? `${activeCwdName} - Pi Web` : "Pi Web";
 
@@ -1686,6 +1866,7 @@ export function AppShell() {
         onBackgroundTaskDone={handleBackgroundTaskDone}
         hiddenFinishedSessionIds={hiddenFinishedSessionIds}
         onRunningSessionIdsChange={handleRunningSessionIdsChange}
+        onUnreadSessionIdsChange={setUnreadSessionIds}
         onSessionsChange={handleSessionsChange}
       />
       <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
@@ -2892,51 +3073,74 @@ export function AppShell() {
         {isMobile && renderProjectTrustWarning(true)}
         </div>
 
+        {sessionTabItems.length > 0 && (
+          <SessionTabBar
+            tabs={sessionTabItems}
+            activeTabId={visibleSessionId ?? null}
+            onSelectTab={selectSessionTab}
+            onCloseTab={closeSessionTab}
+            onReorderTab={(from, to) => {
+              setOpenTabIds(moveOpenSessionTab(openTabSessions.map(({ id }) => id), from, to));
+            }}
+          />
+        )}
+
         {/* Chat content */}
         <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
-          {showChat ? (
-            <ChatWindow
-              key={sessionKey}
-              session={selectedSession}
-              searchTarget={searchTarget?.sessionId === selectedSession?.id ? searchTarget : null}
-              onSearchTargetHandled={handleSearchTargetHandled}
-              initialScrollPosition={selectedSession ? sessionScrollPositionsRef.current.get(selectedSession.id) ?? null : null}
-              onScrollPositionChange={handleSessionScrollPositionChange}
-              sessionRunning={Boolean(selectedSession && runningSessionIds.has(selectedSession.id))}
-              newSessionCwd={effectiveNewSessionCwd}
-              newSessionDraftKey={newSessionDraftKey}
-              newSessionContextBar={newSessionContextBar}
-              initialNewSessionChoices={selectedSession === null ? carriedNewSessionChoices : null}
-              onNewSessionChoicesChange={handleNewSessionChoicesChange}
-              onAgentEnd={handleAgentEnd}
-              onSessionEnded={handleSessionEnded}
-              onToolEnd={handleToolEnd}
-              onAttentionNeeded={handleAttentionNeeded}
-              onSessionCreated={handleSessionCreated}
-              onSessionForked={handleSessionForked}
-              onSideSession={handleSideSession}
-              modelsRefreshKey={modelsRefreshKey}
-              chatInputRef={chatInputRef}
-              onBranchDataChange={handleBranchDataChange}
-              onSystemPromptChange={handleSystemPromptChange}
-              onSystemToolsChange={handleSystemToolsChange}
-              onSystemInfoLoaderChange={handleSystemInfoLoaderChange}
-              onDebugSnapshotReaderChange={handleDebugSnapshotReaderChange}
-              onSessionStatsChange={handleSessionStatsChange}
-              onSessionStatsPanelOpen={openSessionStatsPanel}
-              onOpenSettings={openSettingsSection}
-              onContextUsageChange={handleContextUsageChange}
-              onOpenFile={handleOpenLinkedFile}
-              onFilesUploaded={handleExplorerRefresh}
-              onOpenSubagent={handleOpenSubagentTab}
-              quoteSelectionEnabled={quoteSelectionEnabled}
-              soundEnabled={soundEnabled}
-              onSoundToggle={onSoundToggle}
-              playDoneSound={playDoneSound}
-              unlockAudio={unlockAudio}
-              holdAudio={holdAudio}
-            />
-          ) : initialCwdStatus === "validating" ? (
+          {panes.map(({ key, session, active }) => {
+            const binding = bindPane(key);
+            return (
+              <div
+                key={key}
+                id={session ? "session-pane-" + session.id : undefined}
+                role={session ? "tabpanel" : undefined}
+                aria-labelledby={session ? "session-tab-" + session.id : undefined}
+                data-session-pane={session?.id}
+                data-session-pane-active={String(active)}
+                inert={!active}
+                aria-hidden={!active}
+                style={{ position: "absolute", inset: 0, visibility: active ? "visible" : "hidden" }}
+              >
+                <ChatWindow
+                  {...binding.handlers}
+                  paneVisible={active}
+                  keepEventStream={active || key === previousPaneKeyRef.current}
+                  session={session}
+                  searchTarget={active && searchTarget?.sessionId === session?.id ? searchTarget : null}
+                  onSearchTargetHandled={handleSearchTargetHandled}
+                  initialScrollPosition={session ? sessionScrollPositionsRef.current.get(session.id) ?? null : null}
+                  onScrollPositionChange={handleSessionScrollPositionChange}
+                  sessionRunning={Boolean(session && runningSessionIds.has(session.id))}
+                  newSessionCwd={session ? null : effectiveNewSessionCwd}
+                  newSessionDraftKey={session ? null : newSessionDraftKey}
+                  newSessionContextBar={session ? null : newSessionContextBar}
+                  initialNewSessionChoices={session ? null : carriedNewSessionChoices}
+                  onNewSessionChoicesChange={session ? undefined : handleNewSessionChoicesChange}
+                  onAgentEnd={(end) => handleAgentEnd(end, session ?? (activePaneKeyRef.current === key ? selectedSessionRef.current : null))}
+                  onSessionEnded={handleSessionEnded}
+                  onToolEnd={handleToolEnd}
+                  onAttentionNeeded={(request) => handleAttentionNeeded(request, session ?? (activePaneKeyRef.current === key ? selectedSessionRef.current : null))}
+                  onSessionCreated={handleSessionCreated}
+                  onSessionForked={(id, forked) => handleSessionForked(id, forked, session)}
+                  onSideSession={handleSideSession}
+                  modelsRefreshKey={modelsRefreshKey}
+                  chatInputRef={binding.input}
+                  onSessionStatsPanelOpen={openSessionStatsPanel}
+                  onOpenSettings={openSettingsSection}
+                  onOpenFile={handleOpenLinkedFile}
+                  onFilesUploaded={handleExplorerRefresh}
+                  onOpenSubagent={handleOpenSubagentTab}
+                  quoteSelectionEnabled={quoteSelectionEnabled}
+                  soundEnabled={soundEnabled}
+                  onSoundToggle={onSoundToggle}
+                  playDoneSound={playDoneSound}
+                  unlockAudio={unlockAudio}
+                  holdAudio={holdAudio}
+                />
+              </div>
+            );
+          })}
+          {showChat ? null : initialCwdStatus === "validating" ? (
             <div
               role="status"
               style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, color: "var(--text-muted)", textAlign: "center" }}
@@ -3154,7 +3358,7 @@ export function AppShell() {
           setSettingsSection(null);
           setModelsRefreshKey((key) => key + 1);
         }}
-        onSessionReloaded={() => setSessionKey((key) => key + 1)}
+        onSessionReloaded={reloadActiveChat}
         projectTrust={projectTrust}
         onOpenTrustDialog={openProjectTrustDialog}
         onProjectTrustChanged={handleProjectTrustChanged}

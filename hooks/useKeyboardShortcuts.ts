@@ -6,14 +6,15 @@ import { useEffect } from "react";
 // Module-level registry — ChatWindow registers the abort handler here so that
 // the global Esc listener in AppShell can call it without prop-drilling.
 // ---------------------------------------------------------------------------
-let globalAbortHandler: (() => void) | null = null;
+const abortHandlers = new Map<string, () => void>();
 
 /**
  * Register (or clear) the abort handler for the global Esc shortcut.
  * Call this from ChatWindow whenever agentRunning or handleAbort changes.
  */
-export function registerAbortHandler(handler: (() => void) | null): void {
-  globalAbortHandler = handler;
+export function registerAbortHandler(handler: (() => void) | null, owner = ""): void {
+  if (handler) abortHandlers.set(owner, handler);
+  else abortHandlers.delete(owner);
 }
 
 /**
@@ -25,15 +26,16 @@ export function registerAbortHandler(handler: (() => void) | null): void {
  * closing them must not stop a run as well. Returns whether it stopped the
  * agent.
  */
-export function handleGlobalEscape(event: KeyboardEvent): boolean {
-  if (event.key !== "Escape" || event.defaultPrevented || !globalAbortHandler) return false;
+export function handleGlobalEscape(event: KeyboardEvent, owner = ""): boolean {
+  const abort = abortHandlers.get(owner);
+  if (event.key !== "Escape" || event.defaultPrevented || !abort) return false;
 
   const tag = (event.target as HTMLElement | null)?.tagName;
   // Let textarea/input handle Esc internally (ChatInput menus / stop).
   if (tag === "TEXTAREA" || tag === "INPUT") return false;
 
   event.preventDefault();
-  globalAbortHandler();
+  abort();
   return true;
 }
 
@@ -70,6 +72,7 @@ interface UseGlobalKeyboardShortcutsOptions {
   onNewSession?: (cwd: string) => void;
   /** The currently selected project directory (sidebar cwd). */
   activeCwd?: string | null;
+  abortOwner?: string;
 }
 
 /**
@@ -89,13 +92,13 @@ interface UseGlobalKeyboardShortcutsOptions {
 export function useGlobalKeyboardShortcuts(
   options: UseGlobalKeyboardShortcutsOptions,
 ): void {
-  const { onNewSession, activeCwd } = options;
+  const { onNewSession, activeCwd, abortOwner } = options;
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
       // ---- Esc: stop agent ----
       if (e.key === "Escape") {
-        handleGlobalEscape(e);
+        handleGlobalEscape(e, abortOwner);
         return;
       }
 
@@ -109,5 +112,5 @@ export function useGlobalKeyboardShortcuts(
 
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeCwd, onNewSession]);
+  }, [abortOwner, activeCwd, onNewSession]);
 }

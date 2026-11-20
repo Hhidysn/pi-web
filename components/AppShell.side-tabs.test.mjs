@@ -67,6 +67,8 @@ test("two unnamed side tabs match the Agents list regardless of open order", () 
   const context = vm.createContext({
     useCallback: (callback) => callback,
     tabs: [],
+    selectedSessionRef: { current: null },
+    setOpenTabIds() {},
     setAgentTabs(update) { context.tabs = update(context.tabs); },
     setActiveFileTabId() {}, setRightPanelOpen() {},
     isMobile: false,

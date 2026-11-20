@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
 import vm from "node:vm";
+import { removeOpenSessionTab } from "../lib/session-tabs.ts";
 
 const source = await readFile(new URL("./AppShell.tsx", import.meta.url), "utf8");
 
@@ -25,6 +26,7 @@ function runHandleSessionDeleted(capturedSelectedSession, active) {
     sessionKey: 0,
     routerReplaced: null,
     refreshBumped: false,
+    openTabIds: ["gone-session", "next-session"],
   };
   const context = vm.createContext({
     crypto: globalThis.crypto,
@@ -36,6 +38,9 @@ function runHandleSessionDeleted(capturedSelectedSession, active) {
     activeNewSessionDraftKeyRef: { current: null },
     invalidateWorkspaceRestore() {},
     clearTabOpenSession() {},
+    setOpenTabIds: (update) => { state.openTabIds = update(state.openTabIds); },
+    setPendingTabSessions() {},
+    removeOpenSessionTab,
     setRefreshKey: () => { state.refreshBumped = true; },
     setNewSessionDraftId: (id) => { state.newSessionDraftId = id; },
     setSelectedSession: (value) => { state.setSelectedSession.push(value); },
@@ -78,6 +83,7 @@ test("a delete completing after the user navigated away keeps the new chat", () 
   const navigatedTo = { id: "next-session", cwd: "/project-b", projectKey: "/project-b" };
   const state = runHandleSessionDeleted(deleting, navigatedTo);
   assert.equal(state.refreshBumped, true, "sidebar list still refreshes");
+  assert.deepEqual(state.openTabIds, ["next-session"]);
   assert.deepEqual(state.setSelectedSession, [], "selection is untouched");
   assert.deepEqual(state.setNewSessionCwd, [], "no empty composer");
   assert.equal(state.newSessionDraftId, null);
@@ -106,6 +112,7 @@ test("a side chat's stored draft goes only once its delete succeeded", async () 
       useCallback: (callback) => callback,
       deleteSideChat: async () => refusal,
       clearDraft: (id) => cleared.push(id),
+      setOpenTabIds() {},
       handleCloseFileTab() {},
       selectedSessionRef: { current: null },
       handleSelectSession() {},

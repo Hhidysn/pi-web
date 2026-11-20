@@ -138,7 +138,7 @@ test("file mention insertion uses one native undoable edit", () => {
     value: '@"my/"',
     selectionStart: 5,
     selectionEnd: 5,
-    focus() { calls.push(["focus"]); },
+    focus() { globalThis.document.activeElement = this; calls.push(["focus"]); },
     setSelectionRange(start, end) {
       this.selectionStart = start;
       this.selectionEnd = end;
@@ -205,7 +205,7 @@ test("file mention insertion falls back to a plain edit when execCommand refuses
     },
     dispatchEvent(event) { events.push([event.type, event.bubbles]); return true; },
   };
-  globalThis.document = { execCommand: () => false };
+  globalThis.document = { activeElement: textarea, execCommand: () => false };
 
   try {
     replaceTextareaRange(textarea, 4, 7, "@readme.md ");
@@ -218,6 +218,33 @@ test("file mention insertion falls back to a plain edit when execCommand refuses
     replaceTextareaRange(textarea, 6, 14, "@file ");
     assert.equal(textarea.value, "hello @file ");
     assert.deepEqual(events, [["input", true]]);
+  } finally {
+    globalThis.document = originalDocument;
+  }
+});
+
+test("an inert textarea edits only its own value when it cannot take focus", () => {
+  const originalDocument = globalThis.document;
+  const foreground = { value: "front draft" };
+  const back = {
+    value: "back draft",
+    selectionStart: 0,
+    selectionEnd: 4,
+    focus() {},
+    setRangeText(text, start, end) {
+      this.value = this.value.slice(0, start) + text + this.value.slice(end);
+    },
+    dispatchEvent(event) { assert.equal(event.type, "input"); },
+  };
+  globalThis.document = {
+    activeElement: foreground,
+    execCommand() { assert.fail("native edit would affect the focused textarea"); },
+  };
+  try {
+    replaceTextareaRange(back, 0, 4, "updated");
+    assert.equal(back.value, "updated draft");
+    assert.equal(foreground.value, "front draft");
+    assert.equal(globalThis.document.activeElement, foreground);
   } finally {
     globalThis.document = originalDocument;
   }

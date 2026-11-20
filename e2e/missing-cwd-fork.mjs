@@ -38,7 +38,7 @@ export async function checkMissingCwdFork({ browser, base, artifacts, fixture, a
       const banner = page.getByRole("alert").filter({ hasText: "Project folder not found" });
       await banner.waitFor();
       assert.ok((await banner.textContent()).includes(`${fixture.gone} no longer exists`));
-      const input = page.locator(".chat-input-textarea");
+      const input = page.locator('[data-session-pane-active="true"] .chat-input-textarea');
       await input.fill("E2E draft for the moved project");
       await page.screenshot({ path: join(artifacts, `missing-cwd-fork-${viewport.width}.png`) });
 
@@ -58,7 +58,7 @@ export async function checkMissingCwdFork({ browser, base, artifacts, fixture, a
       await page.waitForURL((url) => url.searchParams.get("session") === forkedId);
       await picker.waitFor({ state: "detached" });
       await page.getByText("E2E answer before the move", { exact: true }).waitFor();
-      await page.waitForFunction(() => document.querySelector(".chat-input-textarea")?.value === "E2E draft for the moved project");
+      await page.waitForFunction(() => document.querySelector('[data-session-pane-active="true"] .chat-input-textarea')?.value === "E2E draft for the moved project");
       assert.equal(await page.getByRole("alert").filter({ hasText: "Project folder not found" }).count(), 0, "the copy's folder exists");
       // Another project's session, selected in the sidebar as a pick from the list would be.
       const selected = page.locator('.session-tree-main[aria-current="true"]');

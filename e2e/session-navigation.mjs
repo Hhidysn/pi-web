@@ -43,8 +43,8 @@ export async function checkSessionNavigation({ browser, base, artifacts, a, b, a
   const row = (target, id, where = "group") => panel(target).locator(`[data-row-key="session:${where}:${id}"]`);
   const link = (target, id, where = "group") => row(target, id, where).locator("a.session-tree-main");
   const content = {
-    [a.id]: (target) => target.locator(`[data-entry-id="${a.entry}"]:not([data-message-role])`).filter({ hasText: a.text }),
-    [b.id]: (target) => target.locator(`[data-entry-id="${b.entry}"]:not([data-message-role])`).filter({ hasText: b.text }),
+    [a.id]: (target) => target.locator(`[data-session-pane-active="true"] [data-entry-id="${a.entry}"]:not([data-message-role])`).filter({ hasText: a.text }),
+    [b.id]: (target) => target.locator(`[data-session-pane-active="true"] [data-entry-id="${b.entry}"]:not([data-message-role])`).filter({ hasText: b.text }),
   };
   // A tab shows `id`: its URL, the one selected row, and that session's own
   // message. An archived session has no row in the main tree (the archive

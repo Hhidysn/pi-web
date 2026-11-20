@@ -180,9 +180,12 @@ export function replaceTextareaRange(
 ): void {
   const selectionStart = textarea.selectionStart;
   const selectionEnd = textarea.selectionEnd;
-  textarea.focus();
+  textarea.focus({ preventScroll: true });
 
-  if (selectionStart === selectionEnd && start <= selectionStart && end >= selectionEnd) {
+  // 后台标签是 inert。只有焦点确实在目标输入框时，才能调用文档级编辑命令。
+  if (document.activeElement !== textarea) {
+    setTextareaRange(textarea, start, end, text);
+  } else if (selectionStart === selectionEnd && start <= selectionStart && end >= selectionEnd) {
     const finalLength = textarea.value.length - (end - start) + text.length;
     for (let edits = selectionStart - start; edits > 0 && textarea.selectionStart > start; edits--) {
       if (!document.execCommand("delete")) break;

@@ -87,6 +87,12 @@ pi's SDK refuses prompts during a manual compaction ("Cannot submit a prompt whi
 - `get_state.queuedMessages` and `queue_update` merge pi's queue with the parked ones; `clear_queue` (Recall) returns both, plus the parked prompts' `images`, which the client restores with the texts (`restoreRecalledPrompts()`, through `restoreSubmission`). Stop (`abort`) takes back pi's queue (`clearQueue()`) and the parked ones before `inner.abort()`, and returns them for the composer, as the TUI's Esc clears every queue before it aborts and puts the texts in the editor (#1576): a steer left queued was still sent at the stopped run's turn boundary (every steer in `all` mode), the rest with the next prompt, and a parked one would go out when the compaction Stop ends does (`lib/rpc-manager-stop-queue.integration.test.mjs`). Stop compaction (`abort_compaction`) flushes them, as Esc during compaction does in the TUI. A recalled plain prompt gets `prompt_done` with `aborted`.
 - `/compact` completes at once and runs the compaction detached (`handleCompact`, the button's path): `runBuiltinCommand` holds the composer's `<fieldset disabled>` until a builtin command resolves, and awaiting the blocking compact POST there disabled the input and Stop compaction for the whole compaction. A failed compaction puts `/compact <instructions>` back in the composer, where the awaited command used to leave it. Tests: `lib/rpc-manager-compaction-queue*.test.mjs`, `hooks/compact-command.test.mjs`.
 
+## Main conversation tabs (personal fork)
+
+- 顶部会话标签按打开顺序排列，可拖动和关闭。标签列表保存在浏览器，已有的 URL 和会话恢复规则决定当前会话。关闭标签只移除视图。
+- 每个打开的会话持有独立的 `ChatWindow` 和输入框。切换、排序及新会话首次发送都保留对应的 pane 实例。顶部统计、分支和 Debug 读取当前 pane，Esc 也只交给它。
+- 后台 pane 沿用上游的事件流释放和 lease 恢复流程。主区最多保留当前及最近离开的两个事件流，其余标签保持会话续租，切回时重新同步会话。运行中和未读标记来自官方侧栏状态。同一会话在主区与右侧面板之间移动时只保留一个视图。
+
 ## Process details start open without an answer (`ProcessDetailsGroup`, `components/ChatWindow.tsx`)
 A grouped turn's Process details start collapsed only when the answer shown under them has text or an image (`collapsesProcessDetails()`, `lib/message-display.ts`). A turn that ends on an error or truncation notice alone, e.g. empty `stopReason: "error"` replies after text and a trailing tool call, still shows that notice but keeps them open: the earlier text is inside them (#906). The group is keyed on this decision, so a leaf switch that changes it resets the group; a search hit inside opens it (`reveal`).
 

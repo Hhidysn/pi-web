@@ -233,8 +233,6 @@ function GeneralSettings({ sessionId, onSessionReloaded, quoteSelectionEnabled, 
         ? await Notification.requestPermission()
         : Notification.permission;
       if (permission !== "granted") throw new Error("unsupported or not permitted");
-      const registration = await navigator.serviceWorker.ready.catch(() => null);
-      if (!registration) throw new Error("service worker not ready");
       const ok = await setupPushSubscription(locale);
       if (!ok) throw new Error("unsupported or not permitted");
       setPushStatus({ kind: "ok", message: t("settings.pushRegistered") });

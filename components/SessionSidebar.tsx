@@ -258,6 +258,7 @@ interface Props {
    */
   hiddenFinishedSessionIds?: Set<string>;
   onRunningSessionIdsChange?: (ids: Set<string>) => void;
+  onUnreadSessionIdsChange?: (ids: Set<string>) => void;
   onSessionsChange?: (sessions: SessionInfo[]) => void;
 }
 
@@ -528,7 +529,7 @@ function buttonAnchor(element: HTMLElement, align: "start" | "end"): SidebarMenu
   return { kind: "rect", rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }, align };
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSideChat, onNewSession, controlRef, onNewSessionContextChange, initialSessionId, initialSessionLinked, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, hiddenFinishedSessionIds, onRunningSessionIdsChange, onSessionsChange }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSideChat, onNewSession, controlRef, onNewSessionContextChange, initialSessionId, initialSessionLinked, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenTerminal, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions, onBackgroundTaskDone, hiddenFinishedSessionIds, onRunningSessionIdsChange, onUnreadSessionIdsChange, onSessionsChange }: Props) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
@@ -1125,7 +1126,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
   }, [onRunningSessionIdsChange, runningSessionIds]);
 
   useEffect(() => {
-    onSessionsChange?.(allSessions);
+    onUnreadSessionIdsChange?.(unreadSessionIds);
+  }, [onUnreadSessionIdsChange, unreadSessionIds]);
+
+  useEffect(() => {
+    // 空初始值还未经服务器确认，不能用来清理已恢复的会话标签。
+    if (sessionListVersionRef.current !== null) onSessionsChange?.(allSessions);
   }, [allSessions, onSessionsChange]);
 
   // The tab strip's favicon mirrors what the rows show (#1483): a persistent
@@ -2455,7 +2461,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
     focusAfterCommit(() => sessionsPanelRef.current?.querySelector<HTMLElement>('[data-row-key="footer-hidden"] button') ?? selectedTabButton());
   };
 
-  const restoreProject = (project: SidebarProject) => {
+  const restoreProject = useCallback((project: SidebarProject) => {
     const next = hiddenProjectKeys.filter((key) => key !== project.key);
     setHiddenProjectKeys(next);
     saveHiddenProjectKeys(next);
@@ -2465,7 +2471,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
       takeFocusFrom: (active) => active === opener || active === selectedTabButton() });
     // Archived-only or removed projects have no group to reveal.
     focusAfterCommit(() => groupHeaderButton(project.key));
-  };
+  }, [focusAfterCommit, groupHeaderButton, hiddenProjectKeys, menu?.opener, selectedTabButton]);
 
   // After a right-click menu, focus returns to where it was unless the chosen
   // action put it somewhere (a rename field, a delete confirmation).

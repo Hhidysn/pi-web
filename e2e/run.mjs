@@ -262,6 +262,7 @@ try {
     await context.tracing.start({ screenshots: true, snapshots: true });
     page = await context.newPage();
     page.setDefaultTimeout(30_000);
+    const chat = page.locator('[data-session-pane-active="true"]');
     const errors = [];
     const olderResponses = [];
     page.on("pageerror", (error) => errors.push(error.message));
@@ -274,21 +275,21 @@ try {
     const stateReady = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/sessions/${LONG}/state`);
     await page.goto(`${base}/?session=${LONG}`, { waitUntil: "domcontentloaded" });
     assert.equal((await stateReady).status(), 200);
-    await page.getByText(text(4999), { exact: true }).waitFor();
-    const latestUser = await page.getByText(text(4998), { exact: true }).elementHandle();
+    await chat.getByText(text(4999), { exact: true }).waitFor();
+    const latestUser = await chat.getByText(text(4998), { exact: true }).elementHandle();
     assert.ok(latestUser, "Latest user message must be mounted before pagination");
-    const sentinel = page.getByText("Scroll up to load earlier messages", { exact: true });
+    const sentinel = chat.getByText("Scroll up to load earlier messages", { exact: true });
     await sentinel.waitFor({ state: "attached" });
-    assert.equal(await page.getByText(text(4949), { exact: true }).count(), 0);
+    assert.equal(await chat.getByText(text(4949), { exact: true }).count(), 0);
     // The minimap numbers turns from the session's first, not the loaded page's (#791):
     // e0..e4949 hold 2475 user messages, so the turn asking text(4998) is 2500.
     const readMinimapTurn = async (screenshot) => {
-      const node = page.locator("[data-minimap-node-index='0']");
+      const node = chat.locator("[data-minimap-node-index='0']");
       await node.waitFor();
       const rect = await node.boundingBox();
       assert.ok(rect);
       await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
-      const preview = page.locator("[data-minimap-preview-box]");
+      const preview = chat.locator("[data-minimap-preview-box]");
       const turn = preview.locator("[data-minimap-preview-index]").filter({ hasText: text(4998) });
       const result = {
         number: await turn.locator("span[aria-hidden='true']").first().textContent(),
@@ -312,8 +313,8 @@ try {
       const older = (await response.json()).context;
       const firstMessage = older.messages.find((message) => message.role === "user")?.content;
       assert.equal(typeof firstMessage, "string", "Older page must contain user messages");
-      await page.getByText(firstMessage, { exact: true }).waitFor({ state: "attached" });
-      await page.getByText(text(4999), { exact: true }).evaluate((element) => element.scrollIntoView({ block: "end", behavior: "instant" }));
+      await chat.getByText(firstMessage, { exact: true }).waitFor({ state: "attached" });
+      await chat.getByText(text(4999), { exact: true }).evaluate((element) => element.scrollIntoView({ block: "end", behavior: "instant" }));
     }
     assert.deepEqual(await latestUser.evaluate((element) => ({
       connected: element.isConnected,
@@ -333,9 +334,8 @@ try {
       assert.equal(older.oldestEntryId, `e${oldest}`);
       assert.equal(older.hasMore, true);
     }
-    const rendered = await page.getByText(/^E2E message \d{4}$/).allTextContents();
-    // The sidebar also displays the first message as the session title.
-    assert.deepEqual(rendered.filter((value) => value !== text(0)),
+    const rendered = await chat.getByText(/^E2E message \d{4}$/).allTextContents();
+    assert.deepEqual(rendered,
       Array.from({ length: 5000 - oldest }, (_, i) => text(oldest + i)), "Missing, reordered, or duplicate chat messages");
     if (viewport.width > 600) {
       // The minimap lists the turns again a moment after a page lands (its
@@ -355,21 +355,21 @@ try {
     await page.screenshot({ path: join(artifacts, `history-${viewport.width}.png`) });
 
     await page.goto(`${base}/?session=${BRANCH}`, { waitUntil: "domcontentloaded" });
-    await page.getByText("Active branch answer", { exact: true }).waitFor();
-    assert.equal(await page.getByText("Inactive branch answer", { exact: true }).count(), 0);
+    await chat.getByText("Active branch answer", { exact: true }).waitFor();
+    assert.equal(await chat.getByText("Inactive branch answer", { exact: true }).count(), 0);
     const thinkingRequests = [];
     page.on("request", (request) => {
       if (new URL(request.url()).pathname.endsWith("/thinking")) thinkingRequests.push(request.url());
     });
     await page.goto(`${base}/?session=${RICH}`, { waitUntil: "domcontentloaded" });
-    await page.locator("strong").filter({ hasText: "E2E markdown" }).waitFor();
-    await page.locator("pre").filter({ hasText: "console.log('E2E code');" }).waitFor();
-    await page.getByText("E2E final answer", { exact: true }).waitFor();
+    await chat.locator("strong").filter({ hasText: "E2E markdown" }).waitFor();
+    await chat.locator("pre").filter({ hasText: "console.log('E2E code');" }).waitFor();
+    await chat.getByText("E2E final answer", { exact: true }).waitFor();
     const processDetails = page.getByRole("button", { name: /^Process details/ });
     const thinking = page.getByRole("button", { name: /^Thinking/ });
     assert.equal(await processDetails.count(), 1);
     assert.equal(await thinking.count(), 0, "All thinking stays inside process details");
-    const finalMessage = page.locator("[data-entry-id='answer']");
+    const finalMessage = chat.locator("[data-entry-id='answer']");
     const tables = finalMessage.last().locator(".markdown-table-wrap");
     assert.equal(await tables.count(), 2);
     await tables.first().scrollIntoViewIfNeeded();
@@ -402,7 +402,7 @@ try {
     assert.equal(thinkingRequests.length, 0);
     for (const [index, text] of ["Intermediate thinking details.", "Follow-up thinking details.", "Final thinking details."].entries()) {
       await thinking.nth(index).click();
-      await page.getByText(text, { exact: false }).waitFor();
+      await chat.getByText(text, { exact: false }).waitFor();
     }
     assert.equal(thinkingRequests.length, 3);
     const processText = await processDetails.locator("..").innerText();
@@ -412,23 +412,23 @@ try {
     assert.ok(processText.indexOf("E2E process note") < processText.indexOf("E2E final reasoning"));
     assert.equal(processText.split("E2E final reasoning").length - 1, 1);
     assert.ok(!(await finalMessage.last().innerText()).includes("E2E final reasoning"));
-    await page.getByText("echo E2E tool output", { exact: true }).waitFor();
+    await chat.getByText("echo E2E tool output", { exact: true }).waitFor();
     await page.getByRole("button", { name: /bash.*echo E2E tool output/ }).click();
-    await page.getByText("E2E tool output", { exact: true }).waitFor();
+    await chat.getByText("E2E tool output", { exact: true }).waitFor();
     await page.goto(`${base}/?session=${COMPACTED}`, { waitUntil: "domcontentloaded" });
     const heading = page.getByRole("heading", { name: "E2E compacted heading", exact: true });
     await heading.waitFor({ state: "attached" });
     if (viewport.width > 600) {
-      const node = page.locator("[data-minimap-node-index='0']");
+      const node = chat.locator("[data-minimap-node-index='0']");
       await node.waitFor();
       const rect = await node.boundingBox();
       assert.ok(rect);
       await page.mouse.move(rect.x + rect.width / 2, rect.y + rect.height / 2);
-      const preview = page.locator("[data-minimap-preview-box]");
+      const preview = chat.locator("[data-minimap-preview-box]");
       await preview.getByRole("button", { name: "E2E compaction anchor", exact: true }).waitFor();
       await preview.getByRole("button", { name: "E2E compacted heading", exact: true }).click();
       await page.waitForFunction(() => {
-        const heading = document.querySelector("[data-entry-id='answer'] h2");
+        const heading = document.querySelector("[data-session-pane-active='true'] [data-entry-id='answer'] h2");
         const scroll = heading?.closest(".overflow-y-auto");
         return heading && scroll && Math.abs(heading.getBoundingClientRect().top
           - scroll.getBoundingClientRect().top - scroll.clientHeight * 0.3) < 5;
@@ -446,7 +446,7 @@ try {
       };
       const selectSession = async (title, entryId) => {
         await clickSessionRow(title);
-        await page.locator(`[data-entry-id="${entryId}"]:not([data-message-role])`).waitFor({ state: "visible" });
+        await chat.locator(`[data-entry-id="${entryId}"]:not([data-message-role])`).waitFor({ state: "visible" });
       };
       const readingOffset = (target) => target.evaluate((element) => (
         element.getBoundingClientRect().top - element.closest(".overflow-y-auto").getBoundingClientRect().top
@@ -460,9 +460,9 @@ try {
       };
       await selectSession(text(0), "e4999");
       const olderPage = page.waitForResponse((response) => response.url().includes(`/api/sessions/${LONG}/context?`));
-      await page.getByText("Scroll up to load earlier messages", { exact: true }).evaluate((element) => element.scrollIntoView({ block: "start", behavior: "instant" }));
+      await chat.getByText("Scroll up to load earlier messages", { exact: true }).evaluate((element) => element.scrollIntoView({ block: "start", behavior: "instant" }));
       await olderPage;
-      const olderMessage = page.locator("[data-entry-id='e4920']");
+      const olderMessage = chat.locator("[data-entry-id='e4920']");
       const olderOffset = await positionForReading(olderMessage);
       await selectSession("Render **E2E markdown**", "user");
       const process = page.getByRole("button", { name: /process details/i });
@@ -470,10 +470,11 @@ try {
       const answerHeading = page.getByRole("heading", { name: "E2E reading position", exact: true });
       const answerOffset = await positionForReading(answerHeading);
       await selectSession(text(0), "e4920");
-      assert.ok(Math.abs(await readingOffset(olderMessage) - olderOffset) < 5, "Returning to older history must restore its reading offset");
+      const returnedOffset = await readingOffset(olderMessage);
+      assert.ok(Math.abs(returnedOffset - olderOffset) < 5, "Returning to older history must restore its reading offset: " + olderOffset + " -> " + returnedOffset);
       await selectSession("Render **E2E markdown**", "user");
-      assert.equal(await process.getAttribute("aria-expanded"), "false");
-      assert.ok(Math.abs(await readingOffset(answerHeading) - answerOffset) < 5, "Collapsing process details on remount must not displace the answer");
+      assert.equal(await process.getAttribute("aria-expanded"), "true");
+      assert.ok(Math.abs(await readingOffset(answerHeading) - answerOffset) < 5, "Retaining the open details must keep the reading position");
 
       // Hold pagination until a different branch has loaded, exercising effect cancellation.
       let releaseHistory;
@@ -489,22 +490,25 @@ try {
       try {
         const pendingHistory = page.waitForRequest((request) => request.url().includes(`/api/sessions/${LONG}/context?`) && new URL(request.url()).searchParams.has("before"));
         await clickSessionRow(text(0));
+        await chat.getByText("Scroll up to load earlier messages", { exact: true }).evaluate(
+          (element) => element.scrollIntoView({ block: "start", behavior: "instant" }),
+        );
         await pendingHistory;
         await page.getByRole("button", { name: "Branches", exact: true }).click();
         await page.getByText("E2E alternate history branch", { exact: true }).click();
-        await page.locator("[data-entry-id='alternate']:not([data-message-role])").waitFor({ state: "visible" });
+        await chat.locator("[data-entry-id='alternate']:not([data-message-role])").waitFor({ state: "visible" });
         await page.screenshot({ path: join(artifacts, "scroll-restore-branch.png") });
       } finally {
         releaseHistory();
         await page.unroute(contextRoute);
         await page.unroute(agentRoute);
       }
-      console.log("PASS: session reading offsets, collapsed process details, and cancelled branch restoration");
+      console.log("PASS: session reading offsets, retained process details, and cancelled branch restoration");
       await page.goto(`${base}/?session=${COMPACTED}`, { waitUntil: "domcontentloaded" });
       await heading.waitFor({ state: "visible" });
     }
     await page.goto(`${base}/?session=${RICH}`, { waitUntil: "domcontentloaded" });
-    await page.locator(".markdown-code-block pre").waitFor();
+    await chat.locator(".markdown-code-block pre").waitFor();
     await checkFilePanel(page, previewFile);
     await checkLargeHtmlStorage(page, largeStorageFile);
     await checkExtensionDialogs(page, artifacts, viewport.width);
@@ -512,7 +516,7 @@ try {
     await checkComposerFocus(page, { base, sessionId: RICH });
     if (viewport.width > 600) {
       await page.goto(`${base}/?session=${RICH}`, { waitUntil: "domcontentloaded" });
-      await page.locator(".markdown-code-block pre").waitFor();
+      await chat.locator(".markdown-code-block pre").waitFor();
       await checkChatAppearance(page);
       await page.setViewportSize(viewport);
       // Returning from the mobile breakpoint restores the desktop sidebar preference in an effect, so wait for the toggle to settle.
@@ -537,7 +541,7 @@ try {
     await checkModelContext(page);
     await checkModelOrder(page);
     await page.goto(`${base}/?session=${CODE_BACKGROUND}`, { waitUntil: "domcontentloaded" });
-    await page.locator(".markdown-code-block pre").waitFor();
+    await chat.locator(".markdown-code-block pre").waitFor();
     await checkCodeBackground(page);
     await checkStreamingMetrics(page);
     await checkModelSelector(page, { base, project, artifacts });

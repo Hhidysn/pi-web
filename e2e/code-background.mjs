@@ -11,7 +11,7 @@ export async function checkCodeBackground(page) {
   page.on("console", onConsole);
   const source = page.getByRole("button", { name: "Source", exact: true });
   await source.click();
-  const blocks = page.locator(".markdown-code-block pre");
+  const blocks = page.locator('[data-session-pane-active="true"] .markdown-code-block pre');
   await blocks.nth(1).waitFor();
   try {
     for (const colorScheme of ["light", "dark", "light", "dark", "light"]) {
@@ -23,7 +23,7 @@ export async function checkCodeBackground(page) {
         document.body.append(probe);
         const expected = getComputedStyle(probe).backgroundColor;
         probe.remove();
-        const nodes = [...document.querySelectorAll(".markdown-code-block pre")];
+        const nodes = [...document.querySelectorAll('[data-session-pane-active="true"] .markdown-code-block pre')];
         return nodes.length === 2 && nodes.every((node) => (
           getComputedStyle(node).backgroundColor === expected
           && getComputedStyle(node).borderTopWidth === "0px"

@@ -260,6 +260,9 @@ export interface UseAgentSessionOptions {
   onOpenSettings?: (section: SettingsSection) => void;
   setToolPreset?: (preset: ToolPreset) => void;
   deferInitialScroll?: boolean;
+  paneVisible?: boolean;
+  /** 主区同时保留当前和最近离开的会话流，其他标签继续续租。 */
+  keepEventStream?: boolean;
   /** A fresh composer's model and reasoning picks to start with: the composer it replaces had them. */
   initialNewSessionChoices?: NewSessionChoices | null;
   /** A fresh composer reports its own model and reasoning picks, on mount and as they change. */
@@ -461,8 +464,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const {
     session, newSessionCwd, newSessionDraftKey, onAgentEnd, onSessionEnded, onToolEnd, onAttentionNeeded, onSessionCreated, onSessionForked, onSideSession,
     modelsRefreshKey, onBranchDataChange, onSystemPromptChange, onSystemToolsChange, onSystemInfoLoaderChange, onSessionStatsPanelOpen,
-    onOpenSettings, onDebugSnapshotReaderChange,
+    onOpenSettings, onDebugSnapshotReaderChange, paneVisible = true, keepEventStream = true,
   } = opts;
+  const paneVisibleRef = useRef(paneVisible);
+  paneVisibleRef.current = paneVisible;
+  const keepEventStreamRef = useRef(keepEventStream);
+  keepEventStreamRef.current = keepEventStream;
+  const waitingForEventStreamRef = useRef(0);
 
   const isNew = session === null && newSessionCwd !== null;
   const initialChoices = isNew ? opts.initialNewSessionChoices ?? null : null;
@@ -659,6 +667,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // before each (re)connect, the debug reader to show it.
   const wantsEventStream = useCallback((sid: string) => (
     sessionHookMountedRef.current
+    && (keepEventStreamRef.current || waitingForEventStreamRef.current > 0)
     && endedSessionRef.current !== sid
     && sessionIdRef.current === sid
     && (
@@ -1279,9 +1288,24 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     eventConnectionRef.current?.close(reason);
   }, []);
 
-  const ensureEventsConnected = useCallback((sid: string) => (
-    eventConnectionRef.current!.ensureConnected(sid)
-  ), []);
+  const releaseParkedStream = useCallback(() => {
+    if (keepEventStreamRef.current || waitingForEventStreamRef.current > 0 || eventStreamReleasedRef.current) return;
+    eventStreamReleasedRef.current = true;
+    releaseDebugRef.current = { count: releaseDebugRef.current.count + 1, lastAt: Date.now() };
+    closeEvents("released");
+  }, [closeEvents]);
+
+  const ensureEventsConnected = useCallback(async (sid: string) => {
+    waitingForEventStreamRef.current += 1;
+    if (!keepEventStreamRef.current) eventStreamReleasedRef.current = false;
+    try {
+      await eventConnectionRef.current!.ensureConnected(sid);
+    } finally {
+      waitingForEventStreamRef.current -= 1;
+      // 正在等待连接的发送仍然先提交，后台流随后释放。
+      if (!keepEventStreamRef.current) setTimeout(releaseParkedStream, 0);
+    }
+  }, [releaseParkedStream]);
 
   const maintainEventsConnected = useCallback((sid: string) => {
     eventConnectionRef.current!.maintain(sid);
@@ -1299,8 +1323,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // so without re-asserting it here shouldMaintain() refuses the connection
     // and the selected session never opens its event stream.
     sessionHookMountedRef.current = true;
-    eventStreamReleasedRef.current = false;
-    maintainEventsConnected(sid);
+    eventStreamReleasedRef.current = !keepEventStreamRef.current;
+    if (!eventStreamReleasedRef.current) maintainEventsConnected(sid);
     return () => {
       if (sessionIdRef.current === sid) eventConnectionRef.current?.close("deselected");
     };
@@ -1380,9 +1404,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     if (!sid || !eventStreamIdle) return;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    const hidden = () => !paneVisibleRef.current || document.visibilityState === "hidden";
     const releasable = () => (
       !disposed
-      && document.visibilityState === "hidden"
+      && hidden()
       && !eventStreamReleasedRef.current
       && sessionIdRef.current === sid
       && sessionPropIdRef.current === sid
@@ -1409,7 +1434,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       hiddenReleaseDueAtRef.current = Date.now() + HIDDEN_PAGE_GRACE_MS;
     };
     const onVisibilityChange = () => {
-      if (document.visibilityState === "hidden") {
+      if (hidden()) {
         arm();
       } else if (timer) {
         clearTimeout(timer);
@@ -1417,7 +1442,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         hiddenReleaseDueAtRef.current = null;
       }
     };
-    if (document.visibilityState === "hidden") arm();
+    if (hidden()) arm();
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       disposed = true;
@@ -1425,7 +1450,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       hiddenReleaseDueAtRef.current = null;
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [closeEvents, eventStreamIdle, eventStreamReattachCount, requestLease, session?.id]);
+  }, [closeEvents, eventStreamIdle, eventStreamReattachCount, paneVisible, requestLease, session?.id]);
 
   const respondToExtensionUi = useCallback(async (
     request: ExtensionUiDialogRequest,
@@ -1602,7 +1627,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         ));
         break;
       case "setTitle":
-        if (request.title) document.title = stripAnsi(request.title);
+        if (paneVisibleRef.current && request.title) document.title = stripAnsi(request.title);
         break;
       case "set_editor_text":
         // pi's editor setText(): the draft is replaced (an empty text clears it).
@@ -3360,7 +3385,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // dialogs, so their completion and attention notifications reach the page as
   // if it had never let go. Nothing is resent.
   reattachEventStreamRef.current = (sid: string, reason: "visible" | "activity") => {
-    if (!eventStreamReleasedRef.current || endedSessionRef.current === sid) return;
+    if (!keepEventStreamRef.current || !eventStreamReleasedRef.current || endedSessionRef.current === sid) return;
     eventStreamReleasedRef.current = false;
     reattachDebugRef.current = { count: reattachDebugRef.current.count + 1, lastAt: Date.now(), lastReason: reason };
     setEventStreamReattachCount((count) => count + 1);
@@ -3387,14 +3412,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const leaseDebug = leaseDebugRef.current;
     const renew = async () => {
       const reply = await requestLease(sid);
-      if (disposed || document.visibilityState !== "hidden") return;
+      if (disposed || (paneVisibleRef.current && document.visibilityState !== "hidden")) return;
       if (sessionLeaseShowsActivity(reply)) reattachEventStreamRef.current(sid, "activity");
     };
     void renew();
     const interval = setInterval(() => void renew(), SESSION_LEASE_RENEW_INTERVAL_MS);
     leaseDebug.renewStartedAt = Date.now();
     const onVisibilityChange = () => {
-      if (document.visibilityState !== "visible") return;
+      if (!paneVisibleRef.current || document.visibilityState !== "visible") return;
       reattachEventStreamRef.current(sid, "visible");
       // A frozen background page renewed nothing; coming back renews at once.
       void renew();
@@ -3407,6 +3432,15 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [requestLease, session?.id]);
+
+  useEffect(() => {
+    if (!keepEventStream) {
+      releaseParkedStream();
+      return;
+    }
+    if (!paneVisible || !session?.id || document.visibilityState !== "visible") return;
+    reattachEventStreamRef.current(session.id, "visible");
+  }, [keepEventStream, paneVisible, releaseParkedStream, session?.id]);
 
   // Load session on mount
   useEffect(() => {
@@ -3622,7 +3656,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     return () => clearTimeout(t);
   }, [compactResult]);
 
-  // Pause notice expiry while hovered or focused.
+  // 后台标签、悬停或聚焦时暂停提示计时。
   // The remainingMs/startedAt/oldestId refs implement a true pause-and-resume instead of resetting the 5s timer.
   const [pausedNoticeId, setPausedNoticeId] = useState<string | null>(null);
   const noticeRemainingMsRef = useRef(NOTICE_VISIBLE_MS);
@@ -3630,6 +3664,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const noticeOldestIdRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (!paneVisible) return;
     if (noticeState.visible.length === 0) {
       noticeOldestIdRef.current = null;
       return;
@@ -3664,7 +3699,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         noticeTimerStartedAtRef.current = null;
       }
     };
-  }, [noticeState.visible, pausedNoticeId]);
+  }, [noticeState.visible, paneVisible, pausedNoticeId]);
 
   useEffect(() => {
     setSessionStatsOverride(null);

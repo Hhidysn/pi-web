@@ -51,7 +51,7 @@ export async function checkExtensionDialogs(page, artifacts, width) {
   const start = async (mode) => {
     await page.mouse.move(0, 0);
     await page.locator("[data-minimap-preview-box]").waitFor({ state: "hidden" });
-    const input = page.locator("textarea").last();
+    const input = page.locator('[data-session-pane-active="true"] .chat-input-textarea');
     await input.fill(`/e2e-dialog ${mode}`);
     await page.getByRole("button", { name: "Send", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: `E2E ${mode}`, exact: true });
@@ -119,7 +119,7 @@ export async function checkExtensionDialogs(page, artifacts, width) {
 
     // setEditorText() replaces the draft (the last call wins, "" clears it), as pi's
     // editor setText() does; pasteToEditor() inserts at the caret, and "" inserts nothing.
-    const composer = page.locator("textarea").last();
+    const composer = page.locator('[data-session-pane-active="true"] .chat-input-textarea');
     const editorText = await start("editor-text");
     assert.equal(await composer.inputValue(), "E2E replaced", "setEditorText replaces the draft");
     await editorText.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -177,7 +177,7 @@ export async function checkExtensionDialogSizing(page, width) {
   const start = async (mode, name = `E2E ${mode}`) => {
     await page.mouse.move(0, 0);
     await page.locator("[data-minimap-preview-box]").waitFor({ state: "hidden" });
-    await page.locator("textarea").last().fill(`/e2e-dialog ${mode}`);
+    await page.locator('[data-session-pane-active="true"] .chat-input-textarea').fill(`/e2e-dialog ${mode}`);
     await page.getByRole("button", { name: "Send", exact: true }).click();
     const dialog = page.getByRole("dialog", name === null ? undefined : { name, exact: true });
     await dialog.waitFor();

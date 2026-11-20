@@ -34,7 +34,7 @@ export async function checkChatAppearanceReset(page) {
 
 export async function checkChatAppearance(page) {
   await page.setViewportSize({ width: 2560, height: 1100 });
-  const textarea = page.locator(".chat-input-textarea");
+  const textarea = page.locator('[data-session-pane-active="true"] .chat-input-textarea');
   const openSettings = () => page.getByRole("button", { name: "Settings", exact: true }).click();
   const closeSettings = () => page.keyboard.press("Escape");
   const width = page.getByRole("slider", { name: "Chat content width", exact: true });
@@ -42,7 +42,7 @@ export async function checkChatAppearance(page) {
   const font = (locator) => locator.evaluate((el) => getComputedStyle(el).fontSize);
   const fittedHeight = async () => {
     await page.waitForFunction(() => {
-      const input = document.querySelector(".chat-input-textarea");
+      const input = document.querySelector('[data-session-pane-active="true"] .chat-input-textarea');
       return input && (input.scrollHeight <= input.clientHeight + 1 || input.clientHeight >= 199);
     });
     return textarea.evaluate((el) => el.clientHeight);
@@ -74,10 +74,10 @@ export async function checkChatAppearance(page) {
   assert.equal(await textarea.inputValue(), draft);
   assert.ok(await fittedHeight() < narrowHeight, "Widening must shrink the existing draft");
   await page.reload({ waitUntil: "networkidle" });
-  await page.locator(".markdown-code-block pre").waitFor();
+  await page.locator('[data-session-pane-active="true"] .markdown-code-block pre').waitFor();
   assert.equal(await font(textarea), "18px");
-  assert.equal(await font(page.locator(".markdown-user-message")), "18px");
-  assert.equal(await font(page.locator(".markdown-code-block pre")), "16.5px");
+  assert.equal(await font(page.locator('[data-session-pane-active="true"] .markdown-user-message')), "18px");
+  assert.equal(await font(page.locator('[data-session-pane-active="true"] .markdown-code-block pre')), "16.5px");
 
   await openSettings();
   assert.equal(await width.inputValue(), "2000");

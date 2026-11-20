@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 
 export async function checkComposerFocus(page, { base, sessionId }) {
   await page.goto(`${base}/?session=${sessionId}`, { waitUntil: "domcontentloaded" });
-  const input = page.locator(".chat-input-textarea");
+  const input = page.locator('[data-session-pane-active="true"] .chat-input-textarea');
   await input.waitFor();
   const agentUrl = `${base}/api/agent/${encodeURIComponent(sessionId)}`;
   let finishCompaction;
@@ -29,7 +29,7 @@ export async function checkComposerFocus(page, { base, sessionId }) {
       input.press("Control+Enter"),
     ]);
     await page.waitForFunction(() => {
-      const input = document.querySelector(".chat-input-textarea");
+      const input = document.querySelector('[data-session-pane-active="true"] .chat-input-textarea');
       return input?.value === "" && !input.matches(":disabled");
     });
     assert.equal(await input.evaluate(el => document.activeElement === el), true,
