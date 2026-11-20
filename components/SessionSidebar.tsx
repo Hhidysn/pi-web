@@ -327,6 +327,13 @@ type ArchiveDeleteScope = "all" | "old";
 
 const LAST_CUSTOM_CWD_STORAGE_KEY = "pi-web:last-custom-cwd";
 const RUNNING_SESSIONS_POLL_MS = 2500;
+/**
+ * A hidden page keeps polling, slower: it is the only in-page way a run that
+ * finishes in a background tab announces itself (a chime, the unread dot, the
+ * browser notification). Chrome throttles a hidden tab's timers to about one
+ * run a minute anyway, and the request's cost is one directory listing.
+ */
+const RUNNING_SESSIONS_HIDDEN_POLL_MS = 15_000;
 const SESSION_DETAILS_HYDRATION_DELAY_MS = 750;
 // How long the running poll leaves an unknown list version to the first summary (a cold disk).
 const INITIAL_SUMMARY_WAIT_MS = 15_000;
@@ -1023,12 +1030,13 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
 
     const schedule = () => {
       clearTimer();
-      if (stopped || document.visibilityState !== "visible") return;
-      timer = setTimeout(() => void poll(), RUNNING_SESSIONS_POLL_MS);
+      if (stopped) return;
+      const visible = document.visibilityState === "visible";
+      timer = setTimeout(() => void poll(), visible ? RUNNING_SESSIONS_POLL_MS : RUNNING_SESSIONS_HIDDEN_POLL_MS);
     };
 
     const poll = async () => {
-      if (stopped || document.visibilityState !== "visible") return;
+      if (stopped) return;
       const current = new AbortController();
       controller?.abort();
       controller = current;
@@ -1089,13 +1097,12 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onSelectSid
     };
 
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        void poll();
-        return;
-      }
+      // Coming back catches up at once; going away keeps the slow poll running
+      // (a hidden page's completion still has to be noticed).
       clearTimer();
       controller?.abort();
       controller = null;
+      void poll();
     };
 
     void poll();

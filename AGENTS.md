@@ -6,6 +6,8 @@
 npm run dev   # port 30141
 ```
 
+本机 Windows 启动和停止入口见 [Pi Web 开始菜单快捷方式](scripts/windows/pi-web/README.md#本机开始菜单快捷方式)。
+
 Typecheck: `node_modules/.bin/tsc --noEmit` · Lint: `npm run lint`
 
 **Never run `next build` during dev**: it pollutes `.next/` and breaks `npm run dev`.

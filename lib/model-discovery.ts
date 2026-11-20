@@ -1,12 +1,12 @@
 const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
-type EffortLevel = typeof EFFORT_LEVELS[number];
+type ThinkingLevel = typeof EFFORT_LEVELS[number] | "off";
 
 export interface DiscoveredModel {
   id: string;
   name?: string;
   // Capabilities the upstream list publishes, as models.json fields (#856).
-  reasoning?: true;
-  thinkingLevelMap?: Partial<Record<EffortLevel, string | null>>;
+  reasoning?: boolean;
+  thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;
   input?: string[];
   contextWindow?: number;
   maxTokens?: number;
@@ -23,7 +23,7 @@ const CONTEXT_WINDOW_FIELDS = [
 const MAX_TOKENS_FIELDS = ["max_output_tokens", "maxOutputTokens", "max_completion_tokens", "outputTokenLimit"];
 const REASONING_FIELDS = ["supports_reasoning", "supportsReasoning", "reasoning", "thinking"];
 // Every spelling of the effort list; the first one that is an array wins.
-const EFFORT_LIST_FIELDS = ["supported_efforts", "supportedEfforts", "reasoning_levels"];
+const EFFORT_LIST_FIELDS = ["supported_efforts", "supportedEfforts", "reasoning_levels", "supported_reasoning_levels"];
 
 // pi's models.json accepts `text` and `image`; a gateway may advertise more.
 const INPUT_MODALITIES = new Set(["text", "image"]);
@@ -73,26 +73,30 @@ function inputFromValue(value: Record<string, unknown>): string[] | undefined {
  * A list naming none of pi's levels maps nothing.
  */
 function thinkingLevelMapFromEfforts(value: Record<string, unknown>): DiscoveredModel["thinkingLevelMap"] {
-  const list = EFFORT_LIST_FIELDS.map((field) => value[field]).find(Array.isArray);
-  if (!list) return undefined;
-  const advertised = new Set(list.filter((effort): effort is string => typeof effort === "string"));
+  const field = EFFORT_LIST_FIELDS.find((key) => Array.isArray(value[key]));
+  if (!field) return undefined;
+  const list = value[field] as unknown[];
+  const magpie = field === "supported_reasoning_levels";
+  const advertised = new Set(list.map((entry) => magpie && isRecord(entry) ? cleanString(entry.effort) : cleanString(entry)));
   if (!EFFORT_LEVELS.some((level) => advertised.has(level))) return undefined;
   const map: NonNullable<DiscoveredModel["thinkingLevelMap"]> = {};
   for (const level of EFFORT_LEVELS) {
     if (!advertised.has(level)) map[level] = null;
     else if (level === "xhigh" || level === "max") map[level] = level;
   }
+  if (magpie && advertised.has("off")) map.off = "off";
   return map;
 }
 
 function capabilitiesFromValue(value: Record<string, unknown>): Omit<DiscoveredModel, "id" | "name"> {
-  const reasoning = REASONING_FIELDS.some((field) => value[field] === true);
+  const declaredReasoning = REASONING_FIELDS.map((field) => value[field]);
+  const reasoning = declaredReasoning.includes(true) ? true : declaredReasoning.includes(false) ? false : undefined;
   const thinkingLevelMap = reasoning ? thinkingLevelMapFromEfforts(value) : undefined;
   const input = inputFromValue(value);
   const contextWindow = firstPositiveInteger(value, CONTEXT_WINDOW_FIELDS);
   const maxTokens = firstPositiveInteger(value, MAX_TOKENS_FIELDS);
   return {
-    ...(reasoning ? { reasoning: true } : {}),
+    ...(reasoning === undefined ? {} : { reasoning }),
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(input ? { input } : {}),
     ...(contextWindow ? { contextWindow } : {}),
@@ -111,7 +115,8 @@ function modelFromValue(value: unknown): DiscoveredModel | null {
   if (!rawId) return null;
   const id = rawId.startsWith("models/") ? rawId.slice("models/".length) : rawId;
   if (!id) return null;
-  const name = cleanString(value.display_name)
+  const name = cleanString(value.magpie_label)
+    ?? cleanString(value.display_name)
     ?? cleanString(value.displayName)
     ?? (cleanString(value.id) || cleanString(value.model) ? cleanString(value.name) : undefined);
   return { id, ...(name && name !== id ? { name } : {}), ...capabilitiesFromValue(value) };

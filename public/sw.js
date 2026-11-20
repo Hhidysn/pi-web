@@ -1,5 +1,11 @@
 const CACHE_PREFIX = "pi-web";
-const CACHE_VERSION = new URL(self.location.href).searchParams.get("v") || "dev";
+const SCRIPT_URL = new URL(self.location.href);
+const CACHE_VERSION = SCRIPT_URL.searchParams.get("v") || "dev";
+// A development worker takes no part in serving the app: `next dev` owns
+// chunks and HMR, and a cache would serve stale ones. It exists only so a
+// backgrounded or locked phone can be told a run finished (web push), which
+// needs a service worker to show the notification.
+const PUSH_ONLY = SCRIPT_URL.searchParams.get("mode") === "push-only";
 const STATIC_CACHE = `${CACHE_PREFIX}-static-${CACHE_VERSION}`;
 const OFFLINE_URL = "/offline.html";
 const PRECACHE_URLS = [
@@ -15,6 +21,10 @@ const NAVIGATION_TIMEOUT_MS = 8000;
 const ASSET_TIMEOUT_MS = 8000;
 
 self.addEventListener("install", (event) => {
+  if (PUSH_ONLY) {
+    event.waitUntil(self.skipWaiting());
+    return;
+  }
   event.waitUntil(
     caches
       .open(STATIC_CACHE)
@@ -24,6 +34,10 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
+  if (PUSH_ONLY) {
+    event.waitUntil(self.clients.claim());
+    return;
+  }
   event.waitUntil(
     caches
       .keys()
@@ -39,6 +53,10 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
+  // A push-only worker leaves every request to the browser: no navigation
+  // fallback, no asset cache.
+  if (PUSH_ONLY) return;
+
   const { request } = event;
   if (request.method !== "GET") return;
 
