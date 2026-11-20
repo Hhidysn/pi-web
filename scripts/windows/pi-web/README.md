@@ -5,7 +5,7 @@ outside the repository on purpose — the installed copies are machine state:
 
 ```
 Desktop / Start-menu shortcut "Pi Web"
-  -> wscript %LOCALAPPDATA%\pi-web\pi-web-start.vbs   (no window, reports a failure)
+  -> wscript %LOCALAPPDATA%\pi-web\pi-web-start.vbs   (hidden console, reports a failure)
      -> %LOCALAPPDATA%\pi-web\start-pi-web.cmd quiet
         -> this checkout (next dev, or its production build)
         -> or the installed npm package @agegr/pi-web ("official")
@@ -25,6 +25,10 @@ folder, because cmd is happiest with CRLF batch files.
 | 停止 | `C:\Users\24590\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Pi Web (Stop).lnk` | `C:\Users\24590\AppData\Local\pi-web\stop-pi-web.cmd`，调用 `stop-pi-web.ps1` |
 
 本机启动和停止均使用 `30141`。更新已安装脚本前，先和仓库模板比较，保留本机修复。
+
+开始菜单启动不显示命令行窗口。VBS 用隐藏控制台运行启动器并等待其退出，
+Pi Web 的日志写到 `pi-web-30141.log`。浏览器、资源管理器等窗口的关闭不会结束
+服务，停止服务仍使用 Stop 快捷方式。
 
 ## 模板与本机安装版本的差异（2026-10-24）
 

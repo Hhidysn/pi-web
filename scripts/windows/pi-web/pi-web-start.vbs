@@ -1,6 +1,6 @@
 ' ============================================================
 '  Pi Web - background launcher
-'  Starts start-pi-web.cmd with no visible window.
+'  Starts start-pi-web.cmd in a hidden console window.
 '  Reports a non-zero exit (except 100 = already running) in a
 '  message box, with the exit code, the log path and its tail.
 ' ============================================================
@@ -15,8 +15,11 @@ base    = fso.GetParentFolderName(WScript.ScriptFullName)
 ' one log per port; 30141 is the launcher default and what the shortcut uses.
 logfile = fso.BuildPath(base, "pi-web-30141.log")
 If Not fso.FileExists(logfile) Then logfile = fso.BuildPath(base, "pi-web.log")
-cmdline = """" & fso.BuildPath(base, "start-pi-web.cmd") & """ quiet"
+cmdline = """" & fso.BuildPath(base, "start-pi-web.cmd") & """ quiet prod"
 
+' The launcher redirects Pi Web's output to its log, so the console can stay
+' fully hidden. Waiting keeps failure reporting while the server runs in its
+' own process tree; closing a browser or other window cannot interrupt it.
 rc = sh.Run(cmdline, 0, True)          ' 0 = hidden, True = wait for exit
 
 ' 100 = a Pi Web instance was already running; the browser was opened.
